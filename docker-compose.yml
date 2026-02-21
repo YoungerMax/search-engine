@@ -13,6 +13,7 @@ services:
         condition: on-failure
 
   migrator:
+    image: ghcr.io/youngermax/search-engine:latest
     build: .
     env_file:
       - .env
@@ -25,6 +26,7 @@ services:
         condition: none
 
   crawler-worker:
+    image: ghcr.io/youngermax/search-engine:latest
     build: .
     env_file:
       - .env
@@ -37,6 +39,7 @@ services:
         condition: on-failure
 
   search-api:
+    image: ghcr.io/youngermax/search-engine:latest
     build: .
     env_file:
       - .env
@@ -51,6 +54,7 @@ services:
         condition: on-failure
 
   batch-jobs:
+    image: ghcr.io/youngermax/search-engine:latest
     build: .
     env_file:
       - .env
