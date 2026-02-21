@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    env_file:
+      - .env
+    volumes:
+      - pg_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  migrator:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    command: ["alembic", "upgrade", "head"]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+
+  crawler-worker:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - migrator
+    command: ["python", "-m", "app.crawler.worker"]
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+
+  search-api:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - migrator
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  batch-jobs:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - migrator
+    command: ["python", "-m", "app.batch.runner"]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  pg_data:
