@@ -97,8 +97,8 @@ Response shape:
 
 ## 🐝 Swarm Deploy / Update
 
-Builds from `main` publish `ghcr.io/youngermax/search-engine:latest` via GitHub Actions.
-Swarm deploys pull that image directly from GHCR.
+Builds from `main` publish a multi-arch image (`linux/amd64` and `linux/arm64`) to `ghcr.io/youngermax/search-engine:latest` via GitHub Actions.
+Swarm deploys pull that image directly from GHCR on either architecture.
 
 ```bash
 docker swarm init
