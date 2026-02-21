@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from threading import Lock
 import time
-from urllib.parse import urlsplit
 from urllib.parse import urljoin
+from urllib.parse import urlsplit
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from readability import Document
@@ -29,17 +29,6 @@ class DomainRateLimiter:
         self._min_interval_s = 1.0 / requests_per_second
         self._lock = Lock()
         self._next_allowed_at: dict[str, float] = {}
-
-    def wait_for_slot(self, domain: str) -> None:
-        while True:
-            now = time.monotonic()
-            with self._lock:
-                next_allowed = self._next_allowed_at.get(domain, 0.0)
-                if now >= next_allowed:
-                    self._next_allowed_at[domain] = now + self._min_interval_s
-                    return
-                sleep_s = next_allowed - now
-            time.sleep(sleep_s)
 
     def reserve_if_available(self, domain: str) -> bool:
         now = time.monotonic()
@@ -81,11 +70,16 @@ def parse_html(url: str, html: str) -> ParsedPage:
     readable_soup = BeautifulSoup(readable_html, "html.parser")
     content = readable_soup.get_text(" ", strip=True)
 
-    links = []
+    links: list[str] = []
+    seen_links: set[str] = set()
     for a in soup.find_all("a", href=True):
         try:
             absolute = urljoin(url, a["href"])
-            links.append(normalize_url(absolute))
+            normalized = normalize_url(absolute)
+            if normalized in seen_links:
+                continue
+            seen_links.add(normalized)
+            links.append(normalized)
         except Exception:
             continue
 
@@ -126,36 +120,36 @@ def compute_freshness(updated_at: datetime | None, published_at: datetime | None
     return max(0.0, 1.0 - min(365, days) / 365)
 
 
-def process_item(item: QueueItem, queue_manager: QueueManager) -> None:
+async def process_item(item: QueueItem, client: httpx.AsyncClient) -> None:
     logger.info("processing url=%s domain=%s", item.url, item.domain)
+    queue_manager = QueueManager()
     try:
-        res = requests.get(
+        res = await client.get(
             item.url,
-            timeout=settings.request_timeout_s,
             headers={"Accept": "text/html", "User-Agent": settings.user_agent},
-            allow_redirects=True,
+            follow_redirects=True,
         )
         logger.info("fetched url=%s status_code=%s", item.url, res.status_code)
         if res.status_code >= 400:
             logger.warning("non-success status for url=%s status_code=%s", item.url, res.status_code)
-            queue_manager.mark_status(item.url, "non_success_status_error")
+            await asyncio.to_thread(queue_manager.mark_status, item.url, "non_success_status_error")
             return
 
         content_type = res.headers.get("content-type", "")
         if "text/html" not in content_type.lower():
             logger.warning("non-html response for url=%s content_type=%s", item.url, content_type)
-            queue_manager.mark_status(item.url, "processing_error")
+            await asyncio.to_thread(queue_manager.mark_status, item.url, "processing_error")
             return
 
-        parsed = parse_html(item.url, res.text)
+        parsed = await asyncio.to_thread(parse_html, item.url, res.text)
         if not (parsed.title and parsed.description and parsed.content and len(parsed.content) >= 120):
             logger.warning("validation failed for url=%s", item.url)
-            queue_manager.mark_status(item.url, "validation_error")
+            await asyncio.to_thread(queue_manager.mark_status, item.url, "validation_error")
             return
 
         quality = compute_quality(parsed.content, len(parsed.links))
         freshness = compute_freshness(parsed.updated_at, parsed.published_at)
-        _persist(item.url, parsed, quality, freshness)
+        await asyncio.to_thread(_persist, item.url, parsed, quality, freshness)
         logger.info(
             "processed url=%s word_count=%s links=%s quality=%.3f freshness=%.3f",
             item.url,
@@ -164,14 +158,13 @@ def process_item(item: QueueItem, queue_manager: QueueManager) -> None:
             quality,
             freshness,
         )
-        queue_manager.mark_status(item.url, "done")
+        await asyncio.to_thread(queue_manager.mark_status, item.url, "done")
+    except (httpx.TimeoutException, httpx.RequestError):
+        logger.exception("request timeout/error for %s", item.url)
+        await asyncio.to_thread(queue_manager.mark_status, item.url, "processing_error")
     except Exception:
         logger.exception("processing error for %s", item.url)
-        queue_manager.mark_status(item.url, "processing_error")
-
-
-def _process_with_fresh_queue_manager(item: QueueItem) -> None:
-    process_item(item, QueueManager())
+        await asyncio.to_thread(queue_manager.mark_status, item.url, "processing_error")
 
 
 def _domain_for_item(item: QueueItem) -> str:
@@ -232,27 +225,32 @@ def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> 
             doc_id = cur.fetchone()[0]
 
             cur.execute("DELETE FROM tokens WHERE doc_id=%s", (doc_id,))
+            token_rows: list[tuple[int, str, int, list[int]]] = []
             for field, counter in ((1, title_tokens), (2, desc_tokens), (4, body_tokens)):
-                for term, freq in counter.items():
-                    cur.execute(
-                        "INSERT INTO tokens(doc_id, term, field, frequency, positions) VALUES (%s,%s,%s,%s,%s)",
-                        (doc_id, term, field, freq, []),
-                    )
+                token_rows.extend((field, term, freq, []) for term, freq in counter.items())
+            if token_rows:
+                cur.executemany(
+                    "INSERT INTO tokens(doc_id, term, field, frequency, positions) VALUES (%s,%s,%s,%s,%s)",
+                    ((doc_id, term, field, freq, positions) for field, term, freq, positions in token_rows),
+                )
 
             cur.execute("DELETE FROM links_outgoing WHERE source_doc_id=%s", (doc_id,))
-            for link in parsed.links:
-                cur.execute("INSERT INTO links_outgoing(source_doc_id, target_url) VALUES (%s,%s)", (doc_id, link))
-                cur.execute(
+            if parsed.links:
+                cur.executemany(
+                    "INSERT INTO links_outgoing(source_doc_id, target_url) VALUES (%s,%s)",
+                    ((doc_id, link) for link in parsed.links),
+                )
+                cur.executemany(
                     """
                     INSERT INTO crawl_queue(url, status, domain, attempt_count)
                     VALUES (%s, 'queued', split_part(%s,'/',3), 0)
                     ON CONFLICT(url) DO NOTHING
                     """,
-                    (link, link),
+                    ((link, link) for link in parsed.links),
                 )
 
 
-def main() -> None:
+async def run_worker() -> None:
     qm = QueueManager()
     concurrency = max(1, settings.crawler_concurrency)
     dequeue_size = max(settings.queue_batch_size, concurrency * 4)
@@ -263,12 +261,20 @@ def main() -> None:
         dequeue_size,
     )
 
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+    timeout = httpx.Timeout(settings.request_timeout_s)
+    limits = httpx.Limits(
+        max_connections=max(32, concurrency * 8),
+        max_keepalive_connections=max(16, concurrency * 4),
+        keepalive_expiry=30.0,
+    )
+
+    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
         pending: list[QueueItem] = []
-        in_flight: set[Future[None]] = set()
+        in_flight: set[asyncio.Task[None]] = set()
+
         while True:
             if len(pending) < dequeue_size:
-                items = qm.dequeue_many(dequeue_size - len(pending))
+                items = await asyncio.to_thread(qm.dequeue_many, dequeue_size - len(pending))
                 if items:
                     pending.extend(items)
                     logger.info("dequeued %s item(s) pending=%s", len(items), len(pending))
@@ -278,7 +284,7 @@ def main() -> None:
                 next_item = _pop_next_ready_item(pending)
                 if next_item is None:
                     break
-                in_flight.add(pool.submit(_process_with_fresh_queue_manager, next_item))
+                in_flight.add(asyncio.create_task(process_item(next_item, client)))
                 submitted += 1
 
             if submitted:
@@ -287,17 +293,28 @@ def main() -> None:
 
             if in_flight:
                 sleep_s = min(0.2, _min_domain_wait_s(pending)) if pending else 0.2
-                done, _ = wait(in_flight, timeout=sleep_s, return_when=FIRST_COMPLETED)
-                in_flight.difference_update(done)
+                done, not_done = await asyncio.wait(
+                    in_flight,
+                    timeout=sleep_s,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    if task.exception() is not None:
+                        logger.exception("worker task failed", exc_info=task.exception())
+                in_flight = not_done
                 continue
 
             if pending:
                 sleep_s = max(0.01, min(0.2, _min_domain_wait_s(pending)))
-                time.sleep(sleep_s)
+                await asyncio.sleep(sleep_s)
                 continue
 
             logger.info("queue empty, sleeping for 0.5s")
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
+
+
+def main() -> None:
+    asyncio.run(run_worker())
 
 
 if __name__ == "__main__":
