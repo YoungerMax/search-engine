@@ -97,6 +97,9 @@ Response shape:
 
 ## 🐝 Swarm Deploy / Update
 
+Builds from `main` publish `ghcr.io/youngermax/search-engine:latest` via GitHub Actions.
+Swarm deploys pull that image directly from GHCR.
+
 ```bash
 docker swarm init
 ./scripts/update_cluster.sh
