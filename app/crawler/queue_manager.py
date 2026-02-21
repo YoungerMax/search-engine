@@ -5,7 +5,7 @@ import logging
 from psycopg.rows import dict_row
 
 from app.common.db import get_conn
-from app.crawler.normalization import normalize_url
+from app.crawler.normalization import normalize_url, registrable_domain
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class QueueItem:
 class QueueManager:
     def enqueue_url(self, raw_url: str) -> None:
         url = normalize_url(raw_url)
-        domain = url.split("/")[2] if "/" in url else url
+        domain = registrable_domain(url)
         with get_conn() as conn:
             cur = conn.execute(
                 """
@@ -37,12 +37,12 @@ class QueueManager:
                 cur.execute(
                     """
                     WITH next_urls AS (
-                      SELECT url, domain
-                      FROM crawl_queue
-                      WHERE status = 'queued'
-                      ORDER BY last_attempt NULLS FIRST, attempt_count ASC
+                      SELECT q.url, q.domain
+                      FROM crawl_queue q
+                      WHERE q.status = 'queued'
+                      ORDER BY random()
                       LIMIT %s
-                      FOR UPDATE SKIP LOCKED
+                      FOR UPDATE OF q SKIP LOCKED
                     )
                     UPDATE crawl_queue q
                     SET status = 'in_progress',

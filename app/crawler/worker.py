@@ -16,7 +16,7 @@ from readability import Document
 
 from app.common.config import settings
 from app.common.db import get_conn
-from app.crawler.normalization import normalize_url
+from app.crawler.normalization import normalize_url, registrable_domain
 from app.crawler.queue_manager import QueueItem, QueueManager
 from app.crawler.tokenizer import tokenize
 
@@ -168,7 +168,7 @@ async def process_item(item: QueueItem, client: httpx.AsyncClient) -> None:
 
 
 def _domain_for_item(item: QueueItem) -> str:
-    return item.domain or urlsplit(item.url).netloc
+    return item.domain or registrable_domain(item.url) or urlsplit(item.url).netloc
 
 
 def _pop_next_ready_item(pending: list[QueueItem]) -> QueueItem | None:
@@ -243,10 +243,10 @@ def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> 
                 cur.executemany(
                     """
                     INSERT INTO crawl_queue(url, status, domain, attempt_count)
-                    VALUES (%s, 'queued', split_part(%s,'/',3), 0)
+                    VALUES (%s, 'queued', %s, 0)
                     ON CONFLICT(url) DO NOTHING
                     """,
-                    ((link, link) for link in parsed.links),
+                    ((link, registrable_domain(link)) for link in parsed.links),
                 )
 
 

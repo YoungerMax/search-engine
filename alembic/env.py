@@ -14,14 +14,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-for key in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"):
+for key in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT"):
     if key not in os.environ:
         raise RuntimeError(f"{key} must be set")
 
-url = "postgresql+psycopg://{user}:{pwd}@postgres:5432/{db}".format(
+url = "postgresql+psycopg://{user}:{pwd}@{host}:{port}/{db}".format(
     user=os.environ["POSTGRES_USER"],
     pwd=os.environ["POSTGRES_PASSWORD"],
     db=os.environ["POSTGRES_DB"],
+    host=os.environ["POSTGRES_HOST"],
+    port=os.environ["POSTGRES_PORT"]
 )
 config.set_main_option("sqlalchemy.url", url)
 

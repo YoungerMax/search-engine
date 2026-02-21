@@ -183,6 +183,22 @@
     color: var(--ink);
     font-weight: 600;
   }
+  .spellcheck-meta {
+    margin-top: -1rem;
+    margin-bottom: 1.2rem;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .spellcheck-link {
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
 
   /* RESULT CARD */
   .result-card {
@@ -353,6 +369,7 @@
   </div>
   <div class="results-body">
     <div id="results-meta" class="results-meta"></div>
+    <div id="spellcheck-meta" class="spellcheck-meta"></div>
     <div id="results-list"></div>
     <div id="pagination" class="pagination"></div>
   </div>
@@ -370,6 +387,7 @@
   const resultsInput = document.getElementById('results-input');
   const resultsList = document.getElementById('results-list');
   const resultsMeta = document.getElementById('results-meta');
+  const spellcheckMeta = document.getElementById('spellcheck-meta');
   const paginationEl = document.getElementById('pagination');
 
   homeInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
@@ -410,16 +428,28 @@
 
   async function fetchResults(q, offset) {
     resultsMeta.textContent = '';
+    spellcheckMeta.textContent = '';
     paginationEl.innerHTML = '';
     resultsList.innerHTML = '<div class="spinner"></div>';
 
-    const url = `/search?q=${encodeURIComponent(q)}&limit=${LIMIT}&offset=${offset}`;
+    const searchUrl = `/search?q=${encodeURIComponent(q)}&limit=${LIMIT}&offset=${offset}`;
+    const spellcheckUrl = `/spellcheck?q=${encodeURIComponent(q)}`;
 
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      renderResults(data, q, offset);
+      const [searchRes, spellcheckRes] = await Promise.all([
+        fetch(searchUrl),
+        fetch(spellcheckUrl),
+      ]);
+      if (!searchRes.ok) throw new Error(`HTTP ${searchRes.status}`);
+
+      const searchData = await searchRes.json();
+      let suggestion = null;
+      if (spellcheckRes.ok) {
+        const spellcheckData = await spellcheckRes.json();
+        suggestion = spellcheckData.suggestion || null;
+      }
+
+      renderResults(searchData, q, offset, suggestion);
     } catch (err) {
       resultsList.innerHTML = `
         <div class="state-box">
@@ -429,9 +459,15 @@
     }
   }
 
-  function renderResults(data, q, offset) {
+  function renderResults(data, q, offset, suggestion) {
     const results = data.results || [];
     currentTotal = results.length; // no total count in API, use results.length
+
+    if (suggestion && suggestion.toLowerCase() !== q.toLowerCase()) {
+      spellcheckMeta.innerHTML = `Did you mean <button class="spellcheck-link" onclick="searchSuggestion('${escAttr(suggestion)}')">${escHtml(suggestion)}</button>?`;
+    } else {
+      spellcheckMeta.textContent = '';
+    }
 
     if (results.length === 0) {
       resultsMeta.innerHTML = `No results for <strong>"${escHtml(q)}"</strong>`;
@@ -479,9 +515,20 @@
     try { return new URL(url).hostname.replace('www.', ''); } catch { return url; }
   }
 
+  function searchSuggestion(q) {
+    homeInput.value = q;
+    resultsInput.value = q;
+    doSearch(0);
+  }
+
   function escHtml(str) {
     if (!str) return '';
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function escAttr(str) {
+    if (!str) return '';
+    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   }
 </script>
 </body>

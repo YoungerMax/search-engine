@@ -8,6 +8,7 @@ from app.batch.bm25_stats import run as run_bm25
 from app.batch.duplicate_detection import run as run_duplicates
 from app.batch.link_graph_builder import run as run_link_graph
 from app.batch.pagerank import run as run_pagerank
+from app.batch.spellcheck_dictionary import run as run_spellcheck
 
 load_dotenv()
 
@@ -20,6 +21,7 @@ def run_once() -> None:
     run_link_graph()
     run_pagerank()
     run_bm25()
+    run_spellcheck()
 
 
 def main() -> None:
