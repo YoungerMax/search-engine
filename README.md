@@ -108,9 +108,10 @@ docker swarm init
 Update flow:
 
 1. Deploy stack definition.
-2. Scale crawler/API/batch down.
-3. Force migrator and wait for completion.
-4. Scale services back up.
+2. Scale migrator + crawler/API/batch down.
+3. Wait for Postgres to be running.
+4. Run migrator with retries (handles Postgres startup windows).
+5. Scale crawler/API/batch back up.
 
 ---
 

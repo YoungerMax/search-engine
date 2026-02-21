@@ -23,7 +23,7 @@ services:
       - postgres
     command: ["alembic", "upgrade", "head"]
     deploy:
-      replicas: 1
+      replicas: 0
       restart_policy:
         condition: none
     networks:
