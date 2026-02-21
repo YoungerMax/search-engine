@@ -12,8 +12,10 @@ def _conninfo() -> str:
     user = os.environ["POSTGRES_USER"]
     password = os.environ["POSTGRES_PASSWORD"]
     db = os.environ["POSTGRES_DB"]
-    # service name in compose/swarm network
-    return f"postgresql://{user}:{password}@postgres:5432/{db}"
+    host = os.environ["POSTGRES_HOST"]
+    port = os.environ["POSTGRES_PORT"]
+    
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
 @contextmanager

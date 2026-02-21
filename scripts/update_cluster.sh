@@ -4,10 +4,7 @@ set -euo pipefail
 STACK_NAME="search"
 COMPOSE_FILE="docker-compose.yml"
 MIGRATOR_NETWORK="${STACK_NAME}_search-net"
-MIGRATOR_IMAGE="$(docker service inspect "${STACK_NAME}_migrator" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
-if [[ -z "${MIGRATOR_IMAGE}" ]]; then
-  MIGRATOR_IMAGE="ghcr.io/youngermax/search-engine:latest"
-fi
+MIGRATOR_IMAGE="ghcr.io/youngermax/search-engine:latest"
 
 echo "[1/5] Deploying stack definition"
 docker stack deploy -c "$COMPOSE_FILE" "$STACK_NAME"

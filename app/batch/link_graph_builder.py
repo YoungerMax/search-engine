@@ -8,9 +8,10 @@ def run() -> None:
             cur.execute(
                 """
                 INSERT INTO links_resolved(source_doc_id, target_doc_id)
-                SELECT lo.source_doc_id, d.id
+                SELECT DISTINCT lo.source_doc_id, d.id
                 FROM links_outgoing lo
                 JOIN documents d ON d.url = lo.target_url
+                ON CONFLICT (source_doc_id, target_doc_id) DO NOTHING
                 """
             )
 

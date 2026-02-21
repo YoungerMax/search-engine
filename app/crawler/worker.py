@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from threading import Lock
+import time
+from urllib.parse import urlsplit
 from urllib.parse import urljoin
 
 import requests
@@ -19,6 +22,42 @@ from app.crawler.tokenizer import tokenize
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class DomainRateLimiter:
+    def __init__(self, requests_per_second: float) -> None:
+        self._min_interval_s = 1.0 / requests_per_second
+        self._lock = Lock()
+        self._next_allowed_at: dict[str, float] = {}
+
+    def wait_for_slot(self, domain: str) -> None:
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                next_allowed = self._next_allowed_at.get(domain, 0.0)
+                if now >= next_allowed:
+                    self._next_allowed_at[domain] = now + self._min_interval_s
+                    return
+                sleep_s = next_allowed - now
+            time.sleep(sleep_s)
+
+    def reserve_if_available(self, domain: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            next_allowed = self._next_allowed_at.get(domain, 0.0)
+            if now < next_allowed:
+                return False
+            self._next_allowed_at[domain] = now + self._min_interval_s
+            return True
+
+    def seconds_until_available(self, domain: str) -> float:
+        now = time.monotonic()
+        with self._lock:
+            next_allowed = self._next_allowed_at.get(domain, 0.0)
+        return max(0.0, next_allowed - now)
+
+
+domain_rate_limiter = DomainRateLimiter(requests_per_second=1.0)
 
 
 @dataclass
@@ -88,6 +127,7 @@ def compute_freshness(updated_at: datetime | None, published_at: datetime | None
 
 
 def process_item(item: QueueItem, queue_manager: QueueManager) -> None:
+    logger.info("processing url=%s domain=%s", item.url, item.domain)
     try:
         res = requests.get(
             item.url,
@@ -95,27 +135,60 @@ def process_item(item: QueueItem, queue_manager: QueueManager) -> None:
             headers={"Accept": "text/html", "User-Agent": settings.user_agent},
             allow_redirects=True,
         )
+        logger.info("fetched url=%s status_code=%s", item.url, res.status_code)
         if res.status_code >= 400:
+            logger.warning("non-success status for url=%s status_code=%s", item.url, res.status_code)
             queue_manager.mark_status(item.url, "non_success_status_error")
             return
 
         content_type = res.headers.get("content-type", "")
         if "text/html" not in content_type.lower():
+            logger.warning("non-html response for url=%s content_type=%s", item.url, content_type)
             queue_manager.mark_status(item.url, "processing_error")
             return
 
         parsed = parse_html(item.url, res.text)
         if not (parsed.title and parsed.description and parsed.content and len(parsed.content) >= 120):
+            logger.warning("validation failed for url=%s", item.url)
             queue_manager.mark_status(item.url, "validation_error")
             return
 
         quality = compute_quality(parsed.content, len(parsed.links))
         freshness = compute_freshness(parsed.updated_at, parsed.published_at)
         _persist(item.url, parsed, quality, freshness)
+        logger.info(
+            "processed url=%s word_count=%s links=%s quality=%.3f freshness=%.3f",
+            item.url,
+            len(parsed.content.split()),
+            len(parsed.links),
+            quality,
+            freshness,
+        )
         queue_manager.mark_status(item.url, "done")
     except Exception:
         logger.exception("processing error for %s", item.url)
         queue_manager.mark_status(item.url, "processing_error")
+
+
+def _process_with_fresh_queue_manager(item: QueueItem) -> None:
+    process_item(item, QueueManager())
+
+
+def _domain_for_item(item: QueueItem) -> str:
+    return item.domain or urlsplit(item.url).netloc
+
+
+def _pop_next_ready_item(pending: list[QueueItem]) -> QueueItem | None:
+    for idx, item in enumerate(pending):
+        if domain_rate_limiter.reserve_if_available(_domain_for_item(item)):
+            return pending.pop(idx)
+    return None
+
+
+def _min_domain_wait_s(pending: list[QueueItem]) -> float:
+    if not pending:
+        return 0.0
+    return min(domain_rate_limiter.seconds_until_available(_domain_for_item(item)) for item in pending)
 
 
 def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> None:
@@ -181,15 +254,50 @@ def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> 
 
 def main() -> None:
     qm = QueueManager()
-    local_queue: deque[QueueItem] = deque()
+    concurrency = max(1, settings.crawler_concurrency)
+    dequeue_size = max(settings.queue_batch_size, concurrency * 4)
+    logger.info(
+        "crawler worker started batch_size=%s concurrency=%s dequeue_size=%s",
+        settings.queue_batch_size,
+        concurrency,
+        dequeue_size,
+    )
 
-    while True:
-        if not local_queue:
-            local_queue.extend(qm.dequeue_many(settings.queue_batch_size))
-            if not local_queue:
-                break
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        pending: list[QueueItem] = []
+        in_flight: set[Future[None]] = set()
+        while True:
+            if len(pending) < dequeue_size:
+                items = qm.dequeue_many(dequeue_size - len(pending))
+                if items:
+                    pending.extend(items)
+                    logger.info("dequeued %s item(s) pending=%s", len(items), len(pending))
 
-        process_item(local_queue.popleft(), qm)
+            submitted = 0
+            while len(in_flight) < concurrency:
+                next_item = _pop_next_ready_item(pending)
+                if next_item is None:
+                    break
+                in_flight.add(pool.submit(_process_with_fresh_queue_manager, next_item))
+                submitted += 1
+
+            if submitted:
+                logger.info("submitted=%s in_flight=%s pending=%s", submitted, len(in_flight), len(pending))
+                continue
+
+            if in_flight:
+                sleep_s = min(0.2, _min_domain_wait_s(pending)) if pending else 0.2
+                done, _ = wait(in_flight, timeout=sleep_s, return_when=FIRST_COMPLETED)
+                in_flight.difference_update(done)
+                continue
+
+            if pending:
+                sleep_s = max(0.01, min(0.2, _min_domain_wait_s(pending)))
+                time.sleep(sleep_s)
+                continue
+
+            logger.info("queue empty, sleeping for 0.5s")
+            time.sleep(0.5)
 
 
 if __name__ == "__main__":

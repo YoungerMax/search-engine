@@ -38,6 +38,7 @@ This repo ships with a baseline `.env`. Update values as needed:
 - `POSTGRES_DB`
 - `CRAWLER_USER_AGENT`
 - `QUEUE_BATCH_SIZE`
+- `CRAWLER_CONCURRENCY`
 - `REQUEST_TIMEOUT_S`
 - `BATCH_INTERVAL_S`
 
@@ -52,6 +53,12 @@ docker compose up --build
 ```bash
 curl 'http://localhost:8000/search?q=example'
 curl 'http://localhost:8000/search?q=example&limit=10&offset=0'
+```
+
+### Seed a URL into the crawl queue
+
+```bash
+python scripts/seed_url.py 'https://example.com'
 ```
 
 ---
