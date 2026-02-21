@@ -6,11 +6,13 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql
     ports:
-      - "5432:5432"
+      - "55556:5432"
     deploy:
       replicas: 1
       restart_policy:
         condition: on-failure
+    networks:
+      - search-net
 
   migrator:
     image: ghcr.io/youngermax/search-engine:latest
@@ -24,6 +26,8 @@ services:
       replicas: 1
       restart_policy:
         condition: none
+    networks:
+      - search-net
 
   crawler-worker:
     image: ghcr.io/youngermax/search-engine:latest
@@ -37,6 +41,8 @@ services:
       replicas: 3
       restart_policy:
         condition: on-failure
+    networks:
+      - search-net
 
   search-api:
     image: ghcr.io/youngermax/search-engine:latest
@@ -52,6 +58,8 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
+    networks:
+      - search-net
 
   batch-jobs:
     image: ghcr.io/youngermax/search-engine:latest
@@ -65,6 +73,12 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
+    networks:
+      - search-net
 
 volumes:
   pg_data:
+
+networks:
+  search-net:
+    driver: overlay
