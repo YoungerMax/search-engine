@@ -2,7 +2,7 @@ psycopg[binary]
 sqlalchemy
 alembic
 python-dotenv
-requests
+httpx
 beautifulsoup4
 readability-lxml
 python-dateutil

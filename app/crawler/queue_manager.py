@@ -36,25 +36,13 @@ class QueueManager:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     """
-                    WITH ranked AS (
-                      SELECT
-                        url,
-                        domain,
-                        row_number() OVER (
-                          PARTITION BY domain
-                          ORDER BY last_attempt NULLS FIRST, attempt_count ASC
-                        ) AS domain_rank
+                    WITH next_urls AS (
+                      SELECT url, domain
                       FROM crawl_queue
                       WHERE status = 'queued'
-                    ),
-                    next_urls AS (
-                      SELECT q.url, q.domain
-                      FROM crawl_queue q
-                      JOIN ranked r ON r.url = q.url
-                      WHERE q.status = 'queued'
-                      ORDER BY r.domain_rank ASC, q.last_attempt NULLS FIRST, q.attempt_count ASC
+                      ORDER BY last_attempt NULLS FIRST, attempt_count ASC
                       LIMIT %s
-                      FOR UPDATE OF q SKIP LOCKED
+                      FOR UPDATE SKIP LOCKED
                     )
                     UPDATE crawl_queue q
                     SET status = 'in_progress',
