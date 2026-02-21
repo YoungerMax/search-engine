@@ -3,6 +3,11 @@ set -euo pipefail
 
 STACK_NAME="search"
 COMPOSE_FILE="docker-compose.yml"
+MIGRATOR_NETWORK="${STACK_NAME}_search-net"
+MIGRATOR_IMAGE="$(docker service inspect "${STACK_NAME}_migrator" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+if [[ -z "${MIGRATOR_IMAGE}" ]]; then
+  MIGRATOR_IMAGE="ghcr.io/youngermax/search-engine:latest"
+fi
 
 echo "[1/5] Deploying stack definition"
 docker stack deploy -c "$COMPOSE_FILE" "$STACK_NAME"
@@ -32,28 +37,13 @@ echo "[4/5] Running alembic migrations with retries"
 migration_success=false
 for attempt in $(seq 1 5); do
   echo "Migration attempt ${attempt}/5"
-  docker service scale "${STACK_NAME}_migrator=1" >/dev/null
-  docker service update --force "${STACK_NAME}_migrator" >/dev/null
+  if docker run --rm --env-file .env --network "${MIGRATOR_NETWORK}" "${MIGRATOR_IMAGE}" alembic upgrade head; then
+    echo "Migration complete"
+    migration_success=true
+    break
+  fi
 
-  for i in $(seq 1 60); do
-    state="$(docker service ps "${STACK_NAME}_migrator" --no-trunc --format '{{.CurrentState}}' | head -n 1 || true)"
-    if [[ "$state" == Complete* ]]; then
-      echo "Migration complete"
-      migration_success=true
-      break 2
-    fi
-    if [[ "$state" == Failed* ]] || [[ "$state" == Rejected* ]]; then
-      echo "Migration attempt ${attempt} failed with state: $state"
-      break
-    fi
-    sleep 2
-    if [[ "$i" -eq 60 ]]; then
-      echo "Migration attempt ${attempt} timed out"
-      break
-    fi
-  done
-
-  docker service scale "${STACK_NAME}_migrator=0" >/dev/null
+  echo "Migration attempt ${attempt} failed"
   sleep 3
 done
 
@@ -61,8 +51,6 @@ if [[ "$migration_success" != true ]]; then
   echo "Migration failed after all retry attempts"
   exit 1
 fi
-
-docker service scale "${STACK_NAME}_migrator=0" >/dev/null
 
 echo "[5/5] Scaling app services back up"
 docker service scale \

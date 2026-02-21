@@ -82,3 +82,4 @@ volumes:
 networks:
   search-net:
     driver: overlay
+    attachable: true
