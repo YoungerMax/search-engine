@@ -1,0 +1,20 @@
+{
+  "name": "@news/fetcher",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./processor": "./processor.ts",
+    "./parser": "./parser.ts"
+  },
+  "scripts": {
+    "dev": "bun run index.ts",
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "@news/db": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "linkedom": "^0.18.12"
+  }
+}

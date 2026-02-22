@@ -11,6 +11,9 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
+      placement:
+        constraints:
+          - node.hostname == cluster-3
     networks:
       - search-net
 
@@ -38,7 +41,7 @@ services:
       - migrator
     command: ["python", "-m", "app.crawler.worker"]
     deploy:
-      replicas: 3
+      replicas: 1
       restart_policy:
         condition: on-failure
     networks:

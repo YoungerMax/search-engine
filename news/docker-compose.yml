@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    env_file:
+      - .env
+    volumes:
+      - pg_data:/var/lib/postgresql
+    networks:
+      - news
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == cluster-2
+      restart_policy:
+        condition: on-failure
+
+  api:
+    image: ghcr.io/youngermax/news-api:main
+    env_file:
+      - .env
+    networks:
+      - news
+    ports:
+      - "3000:3000"
+    command: ["bun", "run", "packages/api/src/index.ts"]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  fetcher:
+    image: ghcr.io/youngermax/news-api:main
+    env_file:
+      - .env
+    networks:
+      - news
+    command: ["bun", "run", "packages/fetcher/src/index.ts"]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  news:
+    driver: overlay
+
+volumes:
+  pg_data:
