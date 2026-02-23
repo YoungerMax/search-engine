@@ -36,17 +36,25 @@ def run() -> None:
                             new_pr[t] += share
                 pr = new_pr
 
-            for node in nodes:
-                cur.execute(
-                    """
-                    INSERT INTO document_authority(doc_id, pagerank, inlink_count)
-                    VALUES (%s,%s,%s)
-                    ON CONFLICT (doc_id) DO UPDATE
-                    SET pagerank=EXCLUDED.pagerank,
-                        inlink_count=EXCLUDED.inlink_count
-                    """,
-                    (node, pr[node], inlinks[node]),
-                )
+            cur.execute("""
+                CREATE TEMP TABLE tmp_document_authority (
+                  doc_id BIGINT PRIMARY KEY,
+                  pagerank DOUBLE PRECISION NOT NULL,
+                  inlink_count INT NOT NULL
+                ) ON COMMIT DROP
+            """)
+            with cur.copy("COPY tmp_document_authority(doc_id, pagerank, inlink_count) FROM STDIN") as copy:
+                for node in nodes:
+                    copy.write_row((node, pr[node], inlinks[node]))
+
+            cur.execute("""
+                INSERT INTO document_authority(doc_id, pagerank, inlink_count)
+                SELECT doc_id, pagerank, inlink_count
+                FROM tmp_document_authority
+                ON CONFLICT (doc_id) DO UPDATE
+                SET pagerank = EXCLUDED.pagerank,
+                    inlink_count = EXCLUDED.inlink_count
+            """)
 
 
 if __name__ == "__main__":

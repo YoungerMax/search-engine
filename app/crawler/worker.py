@@ -55,6 +55,7 @@ class ParsedPage:
     description: str
     content: str
     links: list[str]
+    feed_links: list[str]
     published_at: datetime | None
     updated_at: datetime | None
 
@@ -71,6 +72,7 @@ def parse_html(url: str, html: str) -> ParsedPage:
     content = readable_soup.get_text(" ", strip=True)
 
     links: list[str] = []
+    feed_links: list[str] = []
     seen_links: set[str] = set()
     for a in soup.find_all("a", href=True):
         try:
@@ -83,9 +85,56 @@ def parse_html(url: str, html: str) -> ParsedPage:
         except Exception:
             continue
 
+
+    feed_links.extend(_extract_feed_links(url, soup))
+
     pub = _extract_ts(soup, "article:published_time")
     upd = _extract_ts(soup, "article:modified_time")
-    return ParsedPage(title=title, description=description, content=content, links=links, published_at=pub, updated_at=upd)
+    return ParsedPage(title=title, description=description, content=content, links=links, feed_links=feed_links, published_at=pub, updated_at=upd)
+
+
+def _extract_feed_links(base_url: str, soup: BeautifulSoup) -> list[str]:
+    discovered: list[str] = []
+    seen: set[str] = set()
+
+    def _add_candidate(raw_value: str) -> None:
+        if not raw_value:
+            return
+        value = raw_value.strip()
+        lowered = value.lower()
+        if not any(marker in lowered for marker in ("rss", "atom", "feed", ".xml")):
+            return
+        try:
+            normalized = normalize_url(urljoin(base_url, value))
+        except Exception:
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        discovered.append(normalized)
+
+    for feed in soup.find_all("link"):
+        rel = feed.get("rel")
+        rel_text = " ".join(rel) if isinstance(rel, list) else str(rel or "")
+        feed_type = (feed.get("type") or "").lower()
+        href = (feed.get("href") or "").strip()
+        if not href:
+            continue
+        if any(marker in feed_type for marker in ("rss", "atom")):
+            if "alternate" in rel_text.lower() or not rel_text:
+                _add_candidate(href)
+            continue
+        if any(marker in rel_text.lower() for marker in ("alternate", "feed", "rss", "atom")):
+            _add_candidate(href)
+
+    for meta in soup.find_all("meta"):
+        meta_name = (meta.get("name") or meta.get("property") or "").lower()
+        if not any(marker in meta_name for marker in ("rss", "atom", "feed")):
+            continue
+        for attr in ("content", "value", "href"):
+            _add_candidate(str(meta.get(attr) or ""))
+
+    return discovered
 
 
 def _extract_ts(soup: BeautifulSoup, prop: str) -> datetime | None:
@@ -120,6 +169,42 @@ def compute_freshness(updated_at: datetime | None, published_at: datetime | None
     return max(0.0, 1.0 - min(365, days) / 365)
 
 
+def _is_feed_content_type(content_type: str) -> bool:
+    lowered = (content_type or "").lower()
+    return any(marker in lowered for marker in ("rss", "atom"))
+
+
+def _register_feed_url(feed_url: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO news_feeds(feed_url, home_url, discovered_by_url)
+                VALUES (%s,%s,%s)
+                ON CONFLICT(feed_url) DO UPDATE SET
+                  home_url = COALESCE(news_feeds.home_url, EXCLUDED.home_url),
+                  discovered_by_url = COALESCE(news_feeds.discovered_by_url, EXCLUDED.discovered_by_url)
+                """,
+                (feed_url, feed_url, feed_url),
+            )
+
+
+def _backfill_news_article_content(url: str, content: str) -> None:
+    if not content or len(content.strip()) < 120:
+        return
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE news_articles
+                SET content = %s, updated_at = now()
+                WHERE url = %s
+                  AND COALESCE(content, '') = ''
+                """,
+                (content, url),
+            )
+
+
 async def process_item(item: QueueItem, client: httpx.AsyncClient) -> None:
     logger.info("processing url=%s domain=%s", item.url, item.domain)
     queue_manager = QueueManager()
@@ -136,12 +221,19 @@ async def process_item(item: QueueItem, client: httpx.AsyncClient) -> None:
             return
 
         content_type = res.headers.get("content-type", "")
+        if _is_feed_content_type(content_type):
+            await asyncio.to_thread(_register_feed_url, item.url)
+            logger.info("registered feed url from crawl=%s content_type=%s", item.url, content_type)
+            await asyncio.to_thread(queue_manager.mark_status, item.url, "done")
+            return
+
         if "text/html" not in content_type.lower():
             logger.warning("non-html response for url=%s content_type=%s", item.url, content_type)
             await asyncio.to_thread(queue_manager.mark_status, item.url, "processing_error")
             return
 
         parsed = await asyncio.to_thread(parse_html, item.url, res.text)
+        await asyncio.to_thread(_backfill_news_article_content, item.url, parsed.content)
         if not (parsed.title and parsed.description and parsed.content and len(parsed.content) >= 120):
             logger.warning("validation failed for url=%s", item.url)
             await asyncio.to_thread(queue_manager.mark_status, item.url, "validation_error")
@@ -232,6 +324,18 @@ def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> 
                 cur.executemany(
                     "INSERT INTO tokens(doc_id, term, field, frequency, positions) VALUES (%s,%s,%s,%s,%s)",
                     ((doc_id, term, field, freq, positions) for field, term, freq, positions in token_rows),
+                )
+
+            if parsed.feed_links:
+                cur.executemany(
+                    """
+                    INSERT INTO news_feeds(feed_url, home_url, discovered_by_url)
+                    VALUES (%s,%s,%s)
+                    ON CONFLICT(feed_url) DO UPDATE SET
+                      home_url = COALESCE(news_feeds.home_url, EXCLUDED.home_url),
+                      discovered_by_url = COALESCE(news_feeds.discovered_by_url, EXCLUDED.discovered_by_url)
+                    """,
+                    ((feed, url, url) for feed in set(parsed.feed_links)),
                 )
 
             cur.execute("DELETE FROM links_outgoing WHERE source_doc_id=%s", (doc_id,))

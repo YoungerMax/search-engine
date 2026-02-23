@@ -41,6 +41,9 @@ This repo ships with a baseline `.env`. Update values as needed:
 - `CRAWLER_CONCURRENCY`
 - `REQUEST_TIMEOUT_S`
 - `BATCH_INTERVAL_S`
+- `BATCH_TOTAL_NODES` (optional, for distributed batch workers)
+- `BATCH_NODE_INDEX` (optional, for distributed batch workers)
+- `BATCH_ROLE` (`auto`, `coordinator`, `worker`)
 
 ### 2) Start the stack
 
@@ -94,7 +97,7 @@ Response shape:
 
 - `app/crawler/queue_manager.py`: queue transitions + batched dequeue.
 - `app/crawler/worker.py`: fetch → parse → validate → tokenize → persist.
-- `app/batch/*.py`: offline global jobs.
+- `app/batch/*.py`: offline global jobs, including integrated RSS/Atom news fetcher.
 - `app/batch/runner.py`: always-running batch scheduler loop.
 - `app/api/main.py`: FastAPI `/search` endpoint.
 - `alembic/`: versioned migrations (single schema source of truth).
@@ -125,3 +128,17 @@ Update flow:
 ## ⏱️ Batch cadence
 
 `batch-jobs` runs continuously and executes the full pipeline every `BATCH_INTERVAL_S` seconds.
+
+
+## 📰 News integration
+
+- News feeds and articles are stored in Postgres via **Alembic migrations** (`news_feeds`, `news_articles`) and the unified `tokens` table (source-aware rows for both web and news).
+- Crawler workers auto-discover RSS/Atom `<link>` metadata and seed `news_feeds`.
+- Batch jobs fetch feeds and index news terms for `/search` news results.
+- Alembic is the canonical migration engine for the integrated stack.
+
+
+## ⚙️ Distributed batch mode
+
+Run multiple `batch-jobs` nodes with `BATCH_TOTAL_NODES` and unique `BATCH_NODE_INDEX` values.
+Sharded work (`duplicate_detection`, `news_fetcher`) runs on all nodes; global work (`link_graph`, `pagerank`, `bm25`, `spellcheck`) runs only on the coordinator (node 0 by default, or forced with `BATCH_ROLE=coordinator`).
