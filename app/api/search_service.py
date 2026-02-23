@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from psycopg.errors import CharacterNotInRepertoire
 
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 from app.crawler.tokenizer import STOPWORDS, TOKEN_RE, tokenize
 
 SEARCH_SQL = """
@@ -110,8 +110,13 @@ class NewsSearchItem(BaseModel):
     published_at: str | None = None
 
 
-class SearchResponse(BaseModel):
-    results: list[WebSearchItem | NewsSearchItem]
+class WebSearchResponse(BaseModel):
+    results: list[WebSearchItem]
+    count: int
+
+
+class NewsSearchResponse(BaseModel):
+    results: list[NewsSearchItem]
     count: int
 
 
@@ -260,22 +265,22 @@ class SearchService:
             )
         return news_results
 
-    def perform_web_search(self, *, q: str, limit: int = 20, offset: int = 0) -> SearchResponse:
+    async def perform_web_search(self, *, q: str, limit: int = 20, offset: int = 0) -> WebSearchResponse:
         context = self._search_context(q, limit, offset)
         if not context:
-            return SearchResponse(results=[], count=0)
+            return WebSearchResponse(results=[], count=0)
 
-        with get_conn() as conn:
+        async with get_conn_async() as conn:
             try:
-                with conn.cursor() as cur:
-                    cur.execute(SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-                    rows = cur.fetchall()
+                async with conn.cursor() as cur:
+                    await cur.execute(SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+                    rows = await cur.fetchall()
             except CharacterNotInRepertoire:
-                conn.rollback()
-                with conn.cursor() as cur:
-                    cur.execute("SET client_encoding TO SQL_ASCII")
-                    cur.execute(FALLBACK_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-                    rows = cur.fetchall()
+                await conn.rollback()
+                async with conn.cursor() as cur:
+                    await cur.execute("SET client_encoding TO SQL_ASCII")
+                    await cur.execute(FALLBACK_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+                    rows = await cur.fetchall()
                 fallback_results: list[WebSearchItem] = []
                 for row in rows:
                     score = math.log1p(max(float(row[0] or 0.0), 0.0)) * 12.0
@@ -287,33 +292,33 @@ class SearchService:
                     fallback_results.append(WebSearchItem(title="", description="", url="", score=score))
                 fallback_results.sort(key=lambda item: item.score, reverse=True)
                 page = fallback_results[offset : offset + limit]
-                return SearchResponse(results=page, count=max(len(fallback_results), offset + len(page)))
+                return WebSearchResponse(results=page, count=max(len(fallback_results), offset + len(page)))
 
         ranked_results = self._rank_web_rows(rows, context=context)
         page = ranked_results[offset : offset + limit]
-        return SearchResponse(results=page, count=max(len(ranked_results), offset + len(page)))
+        return WebSearchResponse(results=page, count=max(len(ranked_results), offset + len(page)))
 
-    def perform_news_search(self, *, q: str, limit: int = 20, offset: int = 0) -> SearchResponse:
+    async def perform_news_search(self, *, q: str, limit: int = 20, offset: int = 0) -> NewsSearchResponse:
         context = self._search_context(q, limit, offset)
         if not context:
-            return SearchResponse(results=[], count=0)
+            return NewsSearchResponse(results=[], count=0)
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(NEWS_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-                rows = cur.fetchall()
+        async with get_conn_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(NEWS_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+                rows = await cur.fetchall()
 
         ranked = self._rank_news_rows(rows, context=context)
         page = ranked[offset : offset + limit]
-        return SearchResponse(results=page, count=max(len(ranked), offset + len(page)))
+        return NewsSearchResponse(results=page, count=max(len(ranked), offset + len(page)))
 
 
 search_service = SearchService()
 
 
-def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> SearchResponse:
-    return search_service.perform_web_search(q=q, limit=limit, offset=offset)
+async def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> WebSearchResponse:
+    return await search_service.perform_web_search(q=q, limit=limit, offset=offset)
 
 
-def perform_news_search(*, q: str, limit: int = 20, offset: int = 0) -> SearchResponse:
-    return search_service.perform_news_search(q=q, limit=limit, offset=offset)
+async def perform_news_search(*, q: str, limit: int = 20, offset: int = 0) -> NewsSearchResponse:
+    return await search_service.perform_news_search(q=q, limit=limit, offset=offset)

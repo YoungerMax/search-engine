@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.api.search_service import SearchResponse, perform_news_search, perform_web_search
+from app.api.search_service import perform_news_search, perform_web_search
 
 try:
     from fastmcp import FastMCP
@@ -28,24 +28,41 @@ def _bounded(limit: int, offset: int) -> tuple[int, int]:
     return max(1, min(limit, 100)), max(0, offset)
 
 
-def _as_dict(response: SearchResponse | dict[str, object]) -> dict[str, object]:
-    if isinstance(response, SearchResponse):
-        return response.model_dump()
-    return response
-
-
 @mcp.tool(name="search_web", description="Search websites and web documents.")
-def search_web(query: str, limit: int = 20, offset: int = 0) -> dict[str, object]:
+async def search_web(query: str, limit: int = 10, offset: int = 0) -> str:
     """Run a search query against the web index."""
     bounded_limit, bounded_offset = _bounded(limit, offset)
-    return _as_dict(perform_web_search(q=query, limit=bounded_limit, offset=bounded_offset))
+    results = await perform_web_search(q=query, limit=bounded_limit, offset=bounded_offset)
+
+    llm_results = ""
+
+    for result in results.results:
+        llm_results += f"[{result.url}]({result.title})"
+        llm_results += '\n'
+        llm_results += result.description
+        llm_results += '\n'
+        llm_results += '\n'
+    
+    return llm_results.strip()
 
 
 @mcp.tool(name="search_news", description="Search news articles.")
-def search_news(query: str, limit: int = 20, offset: int = 0) -> dict[str, object]:
+async def search_news(query: str, limit: int = 20, offset: int = 0) -> str:
     """Run a search query against the news index."""
     bounded_limit, bounded_offset = _bounded(limit, offset)
-    return _as_dict(perform_news_search(q=query, limit=bounded_limit, offset=bounded_offset))
+    results = await perform_news_search(q=query, limit=bounded_limit, offset=bounded_offset)
+
+    llm_results = ""
+
+    for result in results.results:
+        llm_results += f"[{result.url}]({result.title})"
+        llm_results += '\n'
+        llm_results += result.description
+        llm_results += '\n'
+        llm_results += '\n'
+    
+    return llm_results.strip()
+
 
 
 if __name__ == "__main__":

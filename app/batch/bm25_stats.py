@@ -1,10 +1,10 @@
 import asyncio
 
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 
 
 async def run() -> None:
-    async with get_conn() as conn:
+    async with get_conn_async() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT AVG(word_count)::float FROM documents WHERE status='done'")
             avg_doc_len = (await cur.fetchone())[0] or 0.0

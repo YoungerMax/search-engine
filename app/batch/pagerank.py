@@ -1,14 +1,14 @@
 import asyncio
 from collections import defaultdict
 
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 
 DAMPING = 0.85
 ITERATIONS = 20
 
 
 async def run() -> None:
-    async with get_conn() as conn:
+    async with get_conn_async() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id FROM documents WHERE status='done'")
             nodes = [r[0] for r in await cur.fetchall()]

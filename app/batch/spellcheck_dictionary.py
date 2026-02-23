@@ -9,7 +9,7 @@ from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass
 
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 from app.spellcheck.engine import normalize_word, popularity_score
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ async def _collect_word_stats(cur) -> tuple[Counter[str], Counter[str]]:
 async def run() -> None:
     external_frequency = _collect_external_frequencies()
 
-    async with get_conn() as conn:
+    async with get_conn_async() as conn:
         async with conn.cursor() as cur:
             await _rebuild_words_table(cur)
             doc_frequency, total_frequency = await _collect_word_stats(cur)

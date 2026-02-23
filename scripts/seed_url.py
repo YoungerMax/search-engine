@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from app.crawler.queue_manager import QueueManager
 from app.crawler.normalization import normalize_url
 
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser(
         description="Connect to Postgres and enqueue a seed URL."
     )
@@ -19,9 +20,9 @@ def main() -> None:
     args = parser.parse_args()
 
     normalized = normalize_url(args.url)
-    QueueManager().enqueue_url(args.url)
+    await QueueManager().enqueue_url(args.url)
     print(f"Seed URL queued: {normalized}")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

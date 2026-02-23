@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 from app.crawler.normalization import normalize_url, registrable_domain
 from app.crawler.tokenizer import tokenize
 
@@ -87,7 +87,7 @@ async def run() -> None:
     total_nodes = max(1, int(os.environ.get("BATCH_TOTAL_NODES", "1")))
     node_index = int(os.environ.get("BATCH_NODE_INDEX", "0"))
 
-    async with get_conn() as conn:
+    async with get_conn_async() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
@@ -122,7 +122,7 @@ async def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
     now = datetime.now(timezone.utc)
     next_fetch_at = now + timedelta(minutes=20)
 
-    async with get_conn() as conn:
+    async with get_conn_async() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """

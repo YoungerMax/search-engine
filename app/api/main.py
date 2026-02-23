@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from psycopg.errors import UndefinedFunction, UndefinedObject
 
 from app.api.search_service import SearchResponse, perform_news_search, perform_web_search, search_service
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 from app.crawler.tokenizer import STOPWORDS
 from app.spellcheck.engine import (
     Candidate,
@@ -94,7 +94,7 @@ LIMIT %s
         self._spell_meta_mtime = mtime
         return self._spell_meta_cache
 
-    def suggest(self, q: str) -> SpellcheckResponse:
+    async def suggest(self, q: str) -> SpellcheckResponse:
         words = [self.engine.normalize_word(w) for w in SPELLCHECK_WORD_RE.findall(q)]
         words = [w for w in words if w and w not in STOPWORDS]
         if not words:
@@ -103,12 +103,12 @@ LIMIT %s
         cached_lexicon = self.load_spell_meta()
         known: dict[str, LexiconEntry] = {word: cached_lexicon[word] for word in words if word in cached_lexicon}
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
+        async with get_conn_async() as conn:
+            async with conn.cursor() as cur:
                 missing_words = [word for word in words if word not in known]
                 if missing_words:
-                    cur.execute(self.SPELLCHECK_KNOWN_SQL, (missing_words,))
-                    for row in cur.fetchall():
+                    await cur.execute(self.SPELLCHECK_KNOWN_SQL, (missing_words,))
+                    for row in await cur.fetchall():
                         known[row[0]] = LexiconEntry(
                             word=row[0],
                             doc_frequency=int(row[1] or 0),
@@ -129,7 +129,7 @@ LIMIT %s
 
                 candidates_by_word: dict[str, dict[str, Candidate]] = defaultdict(dict)
                 try:
-                    cur.execute(
+                    await cur.execute(
                         self.SPELLCHECK_CANDIDATE_SQL,
                         (
                             suspect,
@@ -137,7 +137,7 @@ LIMIT %s
                             self.SPELLCHECK_MAX_CANDIDATES_PER_WORD,
                         ),
                     )
-                    for row in cur.fetchall():
+                    for row in await cur.fetchall():
                         candidate = Candidate(
                             word=row[1],
                             doc_frequency=int(row[2] or 0),
@@ -147,10 +147,10 @@ LIMIT %s
                         )
                         candidates_by_word[row[0]][candidate.word] = candidate
                 except (UndefinedFunction, UndefinedObject):
-                    conn.rollback()
-                    with conn.cursor() as fallback_cur:
+                    await conn.rollback()
+                    async with conn.cursor() as fallback_cur:
                         for word in set(suspect):
-                            fallback_cur.execute(
+                            await fallback_cur.execute(
                                 self.SPELLCHECK_FALLBACK_SQL,
                                 (
                                     word,
@@ -160,7 +160,7 @@ LIMIT %s
                                     self.SPELLCHECK_MAX_CANDIDATES_PER_WORD,
                                 ),
                             )
-                            for row in fallback_cur.fetchall():
+                            for row in await fallback_cur.fetchall():
                                 candidate = Candidate(
                                     word=row[0],
                                     doc_frequency=int(row[1] or 0),
@@ -206,61 +206,28 @@ def index():
 
 
 @app.get("/search", response_model=SearchResponse)
-def search(
+async def search_web(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> SearchResponse:
-    return perform_web_search(q=q, limit=limit, offset=offset)
-
-
-@app.get("/search/web", response_model=SearchResponse)
-def search_web(
-    q: str = Query(..., min_length=1),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-) -> SearchResponse:
-    return perform_web_search(q=q, limit=limit, offset=offset)
+    return await perform_web_search(q=q, limit=limit, offset=offset)
 
 
 @app.get("/search/news", response_model=SearchResponse)
-def search_news(
+async def search_news(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> SearchResponse:
-    return perform_news_search(q=q, limit=limit, offset=offset)
+    return await perform_news_search(q=q, limit=limit, offset=offset)
 
 
 @app.get("/spellcheck", response_model=SpellcheckResponse)
-def spellcheck(
+async def spellcheck(
     q: str = Query(..., min_length=1),
 ) -> SpellcheckResponse:
-    return spellcheck_service.suggest(q)
+    return await spellcheck_service.suggest(q)
 
 
 SPELLCHECK_META_PATH = spellcheck_service.meta_path
-_spell_meta_mtime = spellcheck_service._spell_meta_mtime
-_spell_meta_cache = spellcheck_service._spell_meta_cache
-
-
-def _load_spell_meta() -> dict[str, LexiconEntry]:
-    spellcheck_service.meta_path = SPELLCHECK_META_PATH
-    spellcheck_service._spell_meta_mtime = _spell_meta_mtime
-    spellcheck_service._spell_meta_cache = _spell_meta_cache
-    loaded = spellcheck_service.load_spell_meta()
-    globals()["_spell_meta_mtime"] = spellcheck_service._spell_meta_mtime
-    globals()["_spell_meta_cache"] = spellcheck_service._spell_meta_cache
-    return loaded
-
-
-def _normalize_text(text: str) -> str:
-    return search_service._normalize_text(text)
-
-
-def _extract_query_words(text: str) -> list[str]:
-    return search_service._extract_query_words(text)
-
-
-def _intent_score(**kwargs: object) -> float:
-    return search_service._intent_score(**kwargs)

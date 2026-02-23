@@ -30,16 +30,3 @@ async def get_conn_async() -> AsyncIterator[psycopg.AsyncConnection]:
         raise
     finally:
         await conn.close()
-
-
-@contextmanager
-def get_conn() -> Iterator[Connection]:
-    conn = psycopg.Connection.connect(_conninfo())
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()

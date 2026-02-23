@@ -13,7 +13,7 @@ from dateutil import parser as date_parser
 from readability import Document
 
 from app.common.config import settings
-from app.common.db import get_conn
+from app.common.db import get_conn_async
 from app.crawler.normalization import normalize_url, registrable_domain
 from app.crawler.queue_manager import QueueItem, QueueManager
 from app.crawler.tokenizer import tokenize
@@ -158,10 +158,10 @@ class CrawlerWorker:
         days = (datetime.now(timezone.utc) - ts).days
         return max(0.0, 1.0 - min(365, days) / 365)
 
-    def register_feed_url(self, feed_url: str) -> None:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
+    async def register_feed_url(self, feed_url: str) -> None:
+        async with get_conn_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
                     """
                     INSERT INTO news_feeds(feed_url, home_url, discovered_by_url)
                     VALUES (%s, %s, %s)
@@ -172,13 +172,13 @@ class CrawlerWorker:
                     (feed_url, feed_url, feed_url),
                 )
 
-    def _backfill_news_article_content(self, url: str, content: str) -> None:
+    async def _backfill_news_article_content(self, url: str, content: str) -> None:
         if len((content or "").split()) < 120:
             return
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
+        async with get_conn_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
                     """
                     UPDATE news_articles
                     SET content = %s
@@ -188,14 +188,14 @@ class CrawlerWorker:
                     (content, url),
                 )
 
-    def _persist(self, url: str, parsed: ParsedPage, quality: float, freshness: float) -> None:
+    async def _persist(self, url: str, parsed: ParsedPage, quality: float, freshness: float) -> None:
         title_tokens = tokenize(parsed.title)
         desc_tokens = tokenize(parsed.description)
         body_tokens = tokenize(parsed.content)
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
+        async with get_conn_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
                     """
                 INSERT INTO documents(url, canonical_url, title, description, content, published_at, updated_at, word_count, quality_score, freshness_score, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'done')
@@ -224,22 +224,22 @@ class CrawlerWorker:
                         freshness,
                     ),
                 )
-                doc_id = cur.fetchone()[0]
+                doc_id = (await cur.fetchone())[0]
 
-                cur.execute("DELETE FROM tokens WHERE doc_id = %s", (doc_id,))
+                await cur.execute("DELETE FROM tokens WHERE doc_id = %s", (doc_id,))
                 token_rows = [
                     (doc_id, term, field, freq, [])
                     for field, counter in ((1, title_tokens), (2, desc_tokens), (4, body_tokens))
                     for term, freq in counter.items()
                 ]
                 if token_rows:
-                    cur.executemany(
+                    await cur.executemany(
                         "INSERT INTO tokens(doc_id, term, field, frequency, positions) VALUES (%s, %s, %s, %s, %s)",
                         token_rows,
                     )
 
                 if parsed.feed_links:
-                    cur.executemany(
+                    await cur.executemany(
                         """
                     INSERT INTO news_feeds(feed_url, home_url, discovered_by_url)
                     VALUES (%s, %s, %s)
@@ -250,13 +250,13 @@ class CrawlerWorker:
                         ((feed, url, url) for feed in set(parsed.feed_links)),
                     )
 
-                cur.execute("DELETE FROM links_outgoing WHERE source_doc_id = %s", (doc_id,))
+                await cur.execute("DELETE FROM links_outgoing WHERE source_doc_id = %s", (doc_id,))
                 if parsed.links:
-                    cur.executemany(
+                    await cur.executemany(
                         "INSERT INTO links_outgoing(source_doc_id, target_url) VALUES (%s, %s)",
                         ((doc_id, link) for link in parsed.links),
                     )
-                    cur.executemany(
+                    await cur.executemany(
                         """
                     INSERT INTO crawl_queue(url, status, domain, attempt_count)
                     VALUES (%s, 'queued', %s, 0)
@@ -280,7 +280,7 @@ class CrawlerWorker:
 
             if res.status_code >= 400:
                 logger.warning("non-success status for url=%s status_code=%s", item.url, res.status_code)
-                await asyncio.to_thread(self.queue_manager.mark_status, item.url, "non_success_status_error")
+                await self.queue_manager.mark_status(item.url, "non_success_status_error")
                 return
 
             content_type = res.headers.get("content-type", "")
@@ -288,29 +288,29 @@ class CrawlerWorker:
                 if "xml" in content_type.lower() and not any(m in content_type.lower() for m in ("rss", "atom")):
                     if not self._looks_like_feed(res.text):
                         logger.warning("xml but not a feed url=%s", item.url)
-                        await asyncio.to_thread(self.queue_manager.mark_status, item.url, "processing_error")
+                        await self.queue_manager.mark_status(item.url, "processing_error")
                         return
-                await asyncio.to_thread(self.register_feed_url, item.url)
+                await self.register_feed_url(item.url)
                 logger.info("registered feed url=%s content_type=%s", item.url, content_type)
-                await asyncio.to_thread(self.queue_manager.mark_status, item.url, "done")
+                await self.queue_manager.mark_status(item.url, "done")
                 return
 
             if "text/html" not in content_type.lower():
                 logger.warning("non-html response for url=%s content_type=%s", item.url, content_type)
-                await asyncio.to_thread(self.queue_manager.mark_status, item.url, "processing_error")
+                await self.queue_manager.mark_status(item.url, "processing_error")
                 return
 
-            parsed = await asyncio.to_thread(self.parse_html, item.url, res.text)
-            await asyncio.to_thread(self._backfill_news_article_content, item.url, parsed.content)
+            parsed = self.parse_html(item.url, res.text)
+            await self._backfill_news_article_content(item.url, parsed.content)
 
             if not (parsed.title and parsed.description and parsed.content and len(parsed.content) >= 120):
                 logger.warning("validation failed for url=%s", item.url)
-                await asyncio.to_thread(self.queue_manager.mark_status, item.url, "validation_error")
+                await self.queue_manager.mark_status(item.url, "validation_error")
                 return
 
             quality = self.compute_quality(parsed.content, len(parsed.links))
             freshness = self.compute_freshness(parsed.updated_at, parsed.published_at)
-            await asyncio.to_thread(self._persist, item.url, parsed, quality, freshness)
+            await self._persist(item.url, parsed, quality, freshness)
             logger.info(
                 "finished url=%s word_count=%s links=%s quality=%.3f freshness=%.3f",
                 item.url,
@@ -319,14 +319,14 @@ class CrawlerWorker:
                 quality,
                 freshness,
             )
-            await asyncio.to_thread(self.queue_manager.mark_status, item.url, "done")
+            await self.queue_manager.mark_status(item.url, "done")
 
         except (httpx.TimeoutException, httpx.RequestError):
             logger.exception("request timeout/error for %s", item.url)
-            await asyncio.to_thread(self.queue_manager.mark_status, item.url, "processing_error")
+            await self.queue_manager.mark_status(item.url, "processing_error")
         except Exception:
             logger.exception("processing error for %s", item.url)
-            await asyncio.to_thread(self.queue_manager.mark_status, item.url, "processing_error")
+            await self.queue_manager.mark_status(item.url, "processing_error")
 
     async def run(self) -> None:
         concurrency = max(1, settings.crawler_concurrency)
@@ -351,7 +351,7 @@ class CrawlerWorker:
 
             while True:
                 if len(pending) < dequeue_size:
-                    items = await asyncio.to_thread(self.queue_manager.dequeue_many, dequeue_size - len(pending))
+                    items = await self.queue_manager.dequeue_many(dequeue_size - len(pending))
                     if items:
                         pending.extend(items)
                         logger.info("dequeued %s item(s) pending=%s", len(items), len(pending))
@@ -376,35 +376,12 @@ class CrawlerWorker:
                     await asyncio.sleep(0.5)
 
 
-worker = CrawlerWorker()
-
-
-def parse_html(url: str, html: str) -> ParsedPage:
-    return worker.parse_html(url, html)
-
-
-def _is_feed_content_type(content_type: str) -> bool:
-    return worker.is_feed_content_type(content_type)
-
-
-def _register_feed_url(feed_url: str) -> None:
-    return worker.register_feed_url(feed_url)
-
-
-def _backfill_news_article_content(url: str, content: str) -> None:
-    return worker._backfill_news_article_content(url, content)
-
-
-async def process_item(item: QueueItem, client: httpx.AsyncClient) -> None:
-    await worker.process_item(item, client)
-
-
-async def run_worker() -> None:
-    await worker.run()
 
 
 def main() -> None:
-    asyncio.run(run_worker())
+    worker = CrawlerWorker()
+    
+    asyncio.run(worker.run())
 
 
 if __name__ == "__main__":
