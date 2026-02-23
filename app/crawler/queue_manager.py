@@ -21,15 +21,16 @@ class QueueManager:
         url = normalize_url(raw_url)
         domain = registrable_domain(url)
         with get_conn() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO crawl_queue(url, status, domain, attempt_count)
-                VALUES (%s, 'queued', %s, 0)
-                ON CONFLICT (url) DO NOTHING
-                """,
-                (url, domain),
-            )
-            logger.info("enqueue url=%s inserted=%s", url, cur.rowcount > 0)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO crawl_queue(url, status, domain, attempt_count)
+                    VALUES (%s, 'queued', %s, 0)
+                    ON CONFLICT (url) DO NOTHING
+                    """,
+                    (url, domain),
+                )
+                logger.info("enqueue url=%s inserted=%s", url, cur.rowcount > 0)
 
     def dequeue_many(self, limit: int) -> list[QueueItem]:
         with get_conn() as conn:
@@ -60,8 +61,9 @@ class QueueManager:
 
     def mark_status(self, url: str, status: str) -> None:
         with get_conn() as conn:
-            cur = conn.execute(
-                "UPDATE crawl_queue SET status=%s, last_attempt=%s WHERE url=%s",
-                (status, datetime.now(timezone.utc), url),
-            )
-            logger.info("mark_status url=%s status=%s updated=%s", url, status, cur.rowcount)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE crawl_queue SET status=%s, last_attempt=%s WHERE url=%s",
+                    (status, datetime.now(timezone.utc), url),
+                )
+                logger.info("mark_status url=%s status=%s updated=%s", url, status, cur.rowcount)

@@ -239,7 +239,6 @@ def spellcheck(
     return spellcheck_service.suggest(q)
 
 
-# backward-compatible aliases for existing tests/callers
 SPELLCHECK_META_PATH = spellcheck_service.meta_path
 _spell_meta_mtime = spellcheck_service._spell_meta_mtime
 _spell_meta_cache = spellcheck_service._spell_meta_cache
@@ -255,7 +254,6 @@ def _load_spell_meta() -> dict[str, LexiconEntry]:
     return loaded
 
 
-# backward-compatible ranking helpers for tests
 def _normalize_text(text: str) -> str:
     return search_service._normalize_text(text)
 

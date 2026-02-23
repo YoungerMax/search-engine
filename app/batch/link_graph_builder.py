@@ -1,11 +1,13 @@
+import asyncio
+
 from app.common.db import get_conn
 
 
-def run() -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE links_resolved")
-            cur.execute(
+async def run() -> None:
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("TRUNCATE links_resolved")
+            await cur.execute(
                 """
                 INSERT INTO links_resolved(source_doc_id, target_doc_id)
                 SELECT DISTINCT lo.source_doc_id, d.id
@@ -17,4 +19,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())

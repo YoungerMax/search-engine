@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -109,8 +110,8 @@ def _collect_external_frequencies() -> Counter[str]:
     return external_frequency
 
 
-def _rebuild_words_table(cur) -> None:
-    cur.execute(
+async def _rebuild_words_table(cur) -> None:
+    await cur.execute(
         """
         CREATE TABLE IF NOT EXISTS words (
             word TEXT PRIMARY KEY,
@@ -119,8 +120,8 @@ def _rebuild_words_table(cur) -> None:
         """
     )
 
-    cur.execute("TRUNCATE TABLE words")
-    cur.execute(
+    await cur.execute("TRUNCATE TABLE words")
+    await cur.execute(
         """
         INSERT INTO words(word, total_frequency)
         SELECT word, SUM(freq) AS total_frequency
@@ -147,18 +148,18 @@ def _rebuild_words_table(cur) -> None:
     )
 
 
-def _collect_word_stats(cur) -> tuple[Counter[str], Counter[str]]:
+async def _collect_word_stats(cur) -> tuple[Counter[str], Counter[str]]:
     doc_frequency: Counter[str] = Counter()
     total_frequency: Counter[str] = Counter()
 
-    cur.execute(
+    await cur.execute(
         """
         SELECT word, total_frequency
         FROM words
         """
     )
 
-    for word, total_freq in cur:
+    for word, total_freq in await cur.fetchall():
         normalized = normalize_word(word)
         if not normalized.isalpha() or len(normalized) < 2:
             continue
@@ -167,13 +168,13 @@ def _collect_word_stats(cur) -> tuple[Counter[str], Counter[str]]:
     return doc_frequency, total_frequency
 
 
-def run() -> None:
+async def run() -> None:
     external_frequency = _collect_external_frequencies()
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            _rebuild_words_table(cur)
-            doc_frequency, total_frequency = _collect_word_stats(cur)
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await _rebuild_words_table(cur)
+            doc_frequency, total_frequency = await _collect_word_stats(cur)
 
             all_words = set(doc_frequency.keys()) | set(total_frequency.keys()) | set(external_frequency.keys())
             dictionary_rows: list[tuple[str, int, int, int, float]] = []
@@ -199,7 +200,7 @@ def run() -> None:
             dictionary_rows.sort(key=lambda row: row[4], reverse=True)
             _write_meta_file(dictionary_rows)
 
-            cur.execute(
+            await cur.execute(
                 """
                 CREATE TEMP TABLE tmp_spellcheck_dictionary (
                     word TEXT PRIMARY KEY,
@@ -211,7 +212,7 @@ def run() -> None:
                 """
             )
 
-            with cur.copy(
+            async with cur.copy(
                 """
                 COPY tmp_spellcheck_dictionary(
                     word,
@@ -223,9 +224,9 @@ def run() -> None:
                 """
             ) as copy:
                 for row in dictionary_rows:
-                    copy.write_row(row)
+                    await copy.write_row(row)
 
-            cur.execute(
+            await cur.execute(
                 """
                 INSERT INTO spellcheck_dictionary(
                     word,
@@ -256,7 +257,7 @@ def run() -> None:
             )
             upserted_rows = cur.rowcount
 
-            cur.execute(
+            await cur.execute(
                 """
                 DELETE FROM spellcheck_dictionary s
                 WHERE NOT EXISTS (
@@ -297,4 +298,4 @@ def _write_meta_file(dictionary_rows: list[tuple[str, int, int, int, float]]) ->
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())

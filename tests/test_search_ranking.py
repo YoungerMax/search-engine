@@ -1,4 +1,4 @@
-from app.api.main import _extract_query_words, _intent_score, _normalize_text
+from app.api.search_service import _extract_query_words, _intent_score, _normalize_text
 
 
 def test_intent_score_prefers_exact_title_phrase() -> None:

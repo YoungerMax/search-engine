@@ -1,7 +1,7 @@
+import asyncio
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 
@@ -33,13 +33,12 @@ def _should_run_global_jobs(total_nodes: int, node_index: int) -> bool:
     return total_nodes == 1 or node_index == 0
 
 
-def run_once() -> None:
+async def run_once() -> None:
     total_nodes, node_index = _batch_node_config()
     run_global = _should_run_global_jobs(total_nodes, node_index)
 
-    # Sharded tasks run on every node.
-    run_news_fetcher()
-    run_duplicates()
+    await run_news_fetcher()
+    await run_duplicates()
 
     if not run_global:
         logger.info(
@@ -49,35 +48,26 @@ def run_once() -> None:
         )
         return
 
-    run_link_graph()
-
-    # Expensive global tasks run concurrently to reduce wall-clock time.
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [
-            executor.submit(run_pagerank),
-            executor.submit(run_bm25),
-            executor.submit(run_spellcheck),
-        ]
-        for future in futures:
-            future.result()
+    await run_link_graph()
+    await asyncio.gather(run_pagerank(), run_bm25(), run_spellcheck())
 
 
-def main() -> None:
+async def main() -> None:
     interval_s = int(os.environ["BATCH_INTERVAL_S"])
     logger.info("starting batch runner with interval=%ss", interval_s)
 
     while True:
         started = time.time()
         try:
-            run_once()
+            await run_once()
             elapsed = time.time() - started
             sleep_for = max(1, interval_s - int(elapsed))
             logger.info("batch cycle complete in %.2fs; sleeping %ss", elapsed, sleep_for)
-            time.sleep(sleep_for)
+            await asyncio.sleep(sleep_for)
         except Exception:
             logger.exception("batch cycle failed; retrying in 15s")
-            time.sleep(15)
+            await asyncio.sleep(15)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
