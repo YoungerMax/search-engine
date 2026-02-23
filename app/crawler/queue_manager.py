@@ -17,24 +17,25 @@ class QueueItem:
 
 
 class QueueManager:
-    async def enqueue_url(self, raw_url: str) -> None:
+    def enqueue_url(self, raw_url: str) -> None:
         url = normalize_url(raw_url)
         domain = registrable_domain(url)
-        async with get_conn() as conn:
-            cur = await conn.execute(
-                """
-                INSERT INTO crawl_queue(url, status, domain, attempt_count)
-                VALUES (%s, 'queued', %s, 0)
-                ON CONFLICT (url) DO NOTHING
-                """,
-                (url, domain),
-            )
-            logger.info("enqueue url=%s inserted=%s", url, cur.rowcount > 0)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO crawl_queue(url, status, domain, attempt_count)
+                    VALUES (%s, 'queued', %s, 0)
+                    ON CONFLICT (url) DO NOTHING
+                    """,
+                    (url, domain),
+                )
+                logger.info("enqueue url=%s inserted=%s", url, cur.rowcount > 0)
 
-    async def dequeue_many(self, limit: int) -> list[QueueItem]:
-        async with get_conn() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
+    def dequeue_many(self, limit: int) -> list[QueueItem]:
+        with get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
                     """
                     WITH next_urls AS (
                       SELECT q.url, q.domain
@@ -54,14 +55,15 @@ class QueueManager:
                     """,
                     (limit,),
                 )
-                rows = await cur.fetchall()
+                rows = cur.fetchall()
                 logger.info("dequeue requested=%s returned=%s", limit, len(rows))
                 return [QueueItem(url=r["url"], domain=r["domain"]) for r in rows]
 
-    async def mark_status(self, url: str, status: str) -> None:
-        async with get_conn() as conn:
-            cur = await conn.execute(
-                "UPDATE crawl_queue SET status=%s, last_attempt=%s WHERE url=%s",
-                (status, datetime.now(timezone.utc), url),
-            )
-            logger.info("mark_status url=%s status=%s updated=%s", url, status, cur.rowcount)
+    def mark_status(self, url: str, status: str) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE crawl_queue SET status=%s, last_attempt=%s WHERE url=%s",
+                    (status, datetime.now(timezone.utc), url),
+                )
+                logger.info("mark_status url=%s status=%s updated=%s", url, status, cur.rowcount)

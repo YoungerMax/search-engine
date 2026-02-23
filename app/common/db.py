@@ -1,8 +1,9 @@
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
+from typing import AsyncIterator, Iterator
 import os
 
 import psycopg
+from psycopg import Connection
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,7 +20,7 @@ def _conninfo() -> str:
 
 
 @asynccontextmanager
-async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
+async def get_conn_async() -> AsyncIterator[psycopg.AsyncConnection]:
     conn = await psycopg.AsyncConnection.connect(_conninfo())
     try:
         yield conn
@@ -29,3 +30,16 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
         raise
     finally:
         await conn.close()
+
+
+@contextmanager
+def get_conn() -> Iterator[Connection]:
+    conn = psycopg.Connection.connect(_conninfo())
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

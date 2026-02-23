@@ -1,10 +1,7 @@
 import re
 from collections import Counter
 
-import nltk
 from nltk.stem import PorterStemmer
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 
 DEFAULT_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "if", "in", "into",
@@ -15,24 +12,20 @@ DEFAULT_STOPWORDS = {
 
 def _load_stopwords() -> set[str]:
     try:
+        import nltk
         nltk.data.find("corpora/stopwords")
     except LookupError:
         try:
+            import nltk
             nltk.download("stopwords", quiet=True)
         except Exception:
             return DEFAULT_STOPWORDS
 
     try:
+        from nltk.corpus import stopwords
         return set(stopwords.words("english"))
     except LookupError:
         return DEFAULT_STOPWORDS
-
-
-def _safe_word_tokenize(text: str) -> list[str]:
-    try:
-        return word_tokenize(text.lower())
-    except LookupError:
-        return TOKEN_RE.findall(text.lower())
 
 
 STOPWORDS = _load_stopwords()
@@ -41,7 +34,7 @@ stemmer = PorterStemmer()
 
 
 def tokenize(text: str) -> Counter[str]:
-    tokens = _safe_word_tokenize(text)
+    tokens = TOKEN_RE.findall((text or "").lower())
     filtered = [t for t in tokens if t not in STOPWORDS]
     stemmed = [stemmer.stem(t) for t in filtered]
     return Counter(stemmed)
