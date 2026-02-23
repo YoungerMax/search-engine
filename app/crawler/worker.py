@@ -181,12 +181,11 @@ class CrawlerWorker:
                 cur.execute(
                     """
                     UPDATE news_articles
-                    SET content = %s,
-                        word_count = %s
+                    SET content = %s
                     WHERE url = %s
                       AND (content IS NULL OR content = '')
                     """,
-                    (content, len(content.split()), url),
+                    (content, url),
                 )
 
     def _persist(self, url: str, parsed: ParsedPage, quality: float, freshness: float) -> None:
