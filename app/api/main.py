@@ -25,35 +25,35 @@ app = FastAPI(title="Search API")
 
 
 @app.get('/')
-def index():
+async def index():
     return FileResponse(path=Path(os.path.dirname(__file__)) / 'search.html')
 
 
 @app.get("/search")
-def search(
+async def search(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict[str, object]:
-    return perform_web_search(q=q, limit=limit, offset=offset)
+    return await perform_web_search(q=q, limit=limit, offset=offset)
 
 
 @app.get("/search/web")
-def search_web(
+async def search_web(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict[str, object]:
-    return perform_web_search(q=q, limit=limit, offset=offset)
+    return await perform_web_search(q=q, limit=limit, offset=offset)
 
 
 @app.get("/search/news")
-def search_news(
+async def search_news(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict[str, object]:
-    return perform_news_search(q=q, limit=limit, offset=offset)
+    return await perform_news_search(q=q, limit=limit, offset=offset)
 
 
 SPELLCHECK_KNOWN_SQL = """
@@ -122,7 +122,7 @@ def _load_spell_meta() -> dict[str, LexiconEntry]:
 
 
 @app.get("/spellcheck")
-def spellcheck(
+async def spellcheck(
     q: str = Query(..., min_length=1),
 ) -> dict[str, str | None]:
     words = [normalize_word(w) for w in SPELLCHECK_WORD_RE.findall(q)]
@@ -133,12 +133,12 @@ def spellcheck(
     cached_lexicon = _load_spell_meta()
     known: dict[str, LexiconEntry] = {word: cached_lexicon[word] for word in words if word in cached_lexicon}
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
             missing_words = [word for word in words if word not in known]
             if missing_words:
-                cur.execute(SPELLCHECK_KNOWN_SQL, (missing_words,))
-                for row in cur.fetchall():
+                await cur.execute(SPELLCHECK_KNOWN_SQL, (missing_words,))
+                for row in await cur.fetchall():
                     known[row[0]] = LexiconEntry(
                         word=row[0],
                         doc_frequency=int(row[1] or 0),
@@ -160,7 +160,7 @@ def spellcheck(
 
             candidates_by_word: dict[str, dict[str, Candidate]] = defaultdict(dict)
             try:
-                cur.execute(
+                await cur.execute(
                     SPELLCHECK_CANDIDATE_SQL,
                     (
                         suspect,
@@ -168,7 +168,7 @@ def spellcheck(
                         SPELLCHECK_MAX_CANDIDATES_PER_WORD,
                     ),
                 )
-                for row in cur.fetchall():
+                for row in await cur.fetchall():
                     candidate = Candidate(
                         word=row[1],
                         doc_frequency=int(row[2] or 0),
@@ -178,10 +178,10 @@ def spellcheck(
                     )
                     candidates_by_word[row[0]][candidate.word] = candidate
             except (UndefinedFunction, UndefinedObject):
-                conn.rollback()
-                with conn.cursor() as fallback_cur:
+                await conn.rollback()
+                async with conn.cursor() as fallback_cur:
                     for word in set(suspect):
-                        fallback_cur.execute(
+                        await fallback_cur.execute(
                             SPELLCHECK_FALLBACK_SQL,
                             (
                                 word,
@@ -191,7 +191,7 @@ def spellcheck(
                                 SPELLCHECK_MAX_CANDIDATES_PER_WORD,
                             ),
                         )
-                        for row in fallback_cur.fetchall():
+                        for row in await fallback_cur.fetchall():
                             candidate = Candidate(
                                 word=row[0],
                                 doc_frequency=int(row[1] or 0),

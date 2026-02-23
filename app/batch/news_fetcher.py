@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -82,13 +83,13 @@ def _extract_items(feed_url: str, xml_text: str) -> list[dict[str, object]]:
     return items
 
 
-def run() -> None:
+async def run() -> None:
     total_nodes = max(1, int(os.environ.get("BATCH_TOTAL_NODES", "1")))
     node_index = int(os.environ.get("BATCH_NODE_INDEX", "0"))
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 """
                 SELECT feed_url
                 FROM news_feeds
@@ -99,31 +100,31 @@ def run() -> None:
                 """,
                 (total_nodes, node_index, MAX_FEEDS_PER_RUN),
             )
-            feeds = [row[0] for row in cur.fetchall()]
+            feeds = [row[0] for row in await cur.fetchall()]
 
     if not feeds:
         return
 
     timeout = httpx.Timeout(12.0)
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         for feed_url in feeds:
             try:
-                response = client.get(feed_url, headers={"User-Agent": "search-engine-news-fetcher/1.0"})
+                response = await client.get(feed_url, headers={"User-Agent": "search-engine-news-fetcher/1.0"})
                 if response.status_code >= 400:
                     raise RuntimeError(f"status={response.status_code}")
                 items = _extract_items(feed_url, response.text)
-                _persist_feed(feed_url, items)
+                await _persist_feed(feed_url, items)
             except Exception:
                 logger.exception("failed processing feed=%s", feed_url)
 
 
-def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
+async def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
     now = datetime.now(timezone.utc)
     next_fetch_at = now + timedelta(minutes=20)
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 """
                 UPDATE news_feeds
                 SET last_fetched = %s,
@@ -136,7 +137,7 @@ def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
             discovered_urls: set[str] = set()
 
             for item in items:
-                cur.execute(
+                await cur.execute(
                     """
                     INSERT INTO news_articles(url, feed_url, title, description, content, author, published_at, updated_at)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,now())
@@ -170,19 +171,18 @@ def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
                 if not terms:
                     continue
 
-                cur.execute(
+                await cur.execute(
                     "DELETE FROM tokens WHERE source_type = 2 AND article_url = %s",
                     (item["url"],),
                 )
                 if terms:
-                    cur.executemany(
+                    await cur.executemany(
                         "INSERT INTO tokens(doc_id, article_url, source_type, term, field, frequency, positions) VALUES (NULL,%s,2,%s,4,%s,'{}')",
                         ((item["url"], term, freq) for term, freq in terms.items()),
                     )
 
-
             if discovered_urls:
-                cur.executemany(
+                await cur.executemany(
                     """
                     INSERT INTO crawl_queue(url, status, domain, attempt_count)
                     VALUES (%s, 'queued', %s, 0)
@@ -190,3 +190,7 @@ def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
                     """,
                     ((url, registrable_domain(url)) for url in discovered_urls),
                 )
+
+
+if __name__ == "__main__":
+    asyncio.run(run())

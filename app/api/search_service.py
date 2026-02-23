@@ -250,22 +250,22 @@ def _rank_news_rows(rows: list[tuple[Any, ...]], *, context: dict[str, Any]) -> 
     return news_results
 
 
-def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+async def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
     context = _search_context(q, limit, offset)
     if not context:
         return {"results": [], "count": 0}
 
-    with get_conn() as conn:
+    async with get_conn() as conn:
         try:
-            with conn.cursor() as cur:
-                cur.execute(SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-                rows = cur.fetchall()
+            async with conn.cursor() as cur:
+                await cur.execute(SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+                rows = await cur.fetchall()
         except CharacterNotInRepertoire:
-            conn.rollback()
-            with conn.cursor() as cur:
-                cur.execute("SET client_encoding TO SQL_ASCII")
-                cur.execute(FALLBACK_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-                rows = cur.fetchall()
+            await conn.rollback()
+            async with conn.cursor() as cur:
+                await cur.execute("SET client_encoding TO SQL_ASCII")
+                await cur.execute(FALLBACK_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+                rows = await cur.fetchall()
             fallback_results = []
             for row in rows:
                 score = math.log1p(max(float(row[0] or 0.0), 0.0)) * 12.0
@@ -284,15 +284,15 @@ def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> dict[str,
     return {"results": page, "count": max(len(ranked_results), offset + len(page))}
 
 
-def perform_news_search(*, q: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+async def perform_news_search(*, q: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
     context = _search_context(q, limit, offset)
     if not context:
         return {"results": [], "count": 0}
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(NEWS_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
-            rows = cur.fetchall()
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(NEWS_SEARCH_SQL, (context["query_terms"], context["candidate_limit"]))
+            rows = await cur.fetchall()
 
     ranked = _rank_news_rows(rows, context=context)
     page = ranked[offset : offset + limit]
