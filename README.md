@@ -55,16 +55,20 @@ docker compose up --build
 
 ```bash
 curl 'http://localhost:8000/search?q=example'
+curl 'http://localhost:8000/search/web?q=example'
+curl 'http://localhost:8000/search/news?q=example'
 curl 'http://localhost:8000/search?q=example&limit=10&offset=0'
 ```
 
-### 4) Run MCP web search server
+### 4) Run MCP search server
 
-Expose search as an MCP tool (`web_search`) for MCP-compatible clients:
+Expose search as MCP tools (`search_web`, `search_news`) for MCP-compatible clients:
 
 ```bash
 python -m app.mcp.server
 ```
+
+Server name: `OpenGoogle`.
 
 ### Seed a URL into the crawl queue
 
@@ -78,13 +82,17 @@ python scripts/seed_url.py 'https://example.com'
 
 ### `GET /search`
 
+Alias of `/search/web` (web-only results).
+
 Query parameters:
 
 - `q` (required): search query text
 - `limit` (optional, default 20, max 100)
 - `offset` (optional, default 0)
 
-Response shape:
+### `GET /search/web`
+
+Same query parameters as `/search`. Returns only web results:
 
 ```json
 {
@@ -95,9 +103,14 @@ Response shape:
       "url": "https://...",
       "score": 1.234
     }
-  ]
+  ],
+  "count": 1
 }
 ```
+
+### `GET /search/news`
+
+Same query parameters as `/search`. Returns only news results.
 
 ---
 
@@ -107,8 +120,9 @@ Response shape:
 - `app/crawler/worker.py`: fetch → parse → validate → tokenize → persist.
 - `app/batch/*.py`: offline global jobs, including integrated RSS/Atom news fetcher.
 - `app/batch/runner.py`: always-running batch scheduler loop.
-- `app/api/main.py`: FastAPI `/search` endpoint.
-- `app/mcp/server.py`: FastMCP server exposing `web_search` tool.
+- `app/api/main.py`: FastAPI `/search`, `/search/web`, and `/search/news` endpoints.
+- `app/api/search_service.py`: shared search execution + ranking logic used by API and MCP layers.
+- `app/mcp/server.py`: FastMCP server exposing `search_web` and `search_news` tools.
 - `alembic/`: versioned migrations (single schema source of truth).
 - `scripts/update_cluster.sh`: Swarm update with migration window.
 
@@ -143,7 +157,7 @@ Update flow:
 
 - News feeds and articles are stored in Postgres via **Alembic migrations** (`news_feeds`, `news_articles`) and the unified `tokens` table (source-aware rows for both web and news).
 - Crawler workers auto-discover RSS/Atom `<link>` metadata and seed `news_feeds`.
-- Batch jobs fetch feeds and index news terms for `/search` news results.
+- Batch jobs fetch feeds and index news terms for `/search/news` results.
 - Alembic is the canonical migration engine for the integrated stack.
 
 
