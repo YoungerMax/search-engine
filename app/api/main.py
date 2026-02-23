@@ -195,6 +195,15 @@ def search(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict[str, object]:
+    return perform_search(q=q, limit=limit, offset=offset)
+
+
+def perform_search(
+    *,
+    q: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, object]:
     query_terms = list(tokenize(q).keys())
     if not query_terms:
         return {"results": {"web": [], "news": []}, "count": 0}
