@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+
 from app.api.search_service import perform_news_search, perform_web_search
 
 try:
@@ -31,14 +34,20 @@ def _bounded(limit: int, offset: int) -> tuple[int, int]:
 def search_web(query: str, limit: int = 20, offset: int = 0) -> dict[str, object]:
     """Run a search query against the web index."""
     bounded_limit, bounded_offset = _bounded(limit, offset)
-    return perform_web_search(q=query, limit=bounded_limit, offset=bounded_offset)
+    result = perform_web_search(q=query, limit=bounded_limit, offset=bounded_offset)
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
 
 
 @mcp.tool(name="search_news", description="Search news articles.")
 def search_news(query: str, limit: int = 20, offset: int = 0) -> dict[str, object]:
     """Run a search query against the news index."""
     bounded_limit, bounded_offset = _bounded(limit, offset)
-    return perform_news_search(q=query, limit=bounded_limit, offset=bounded_offset)
+    result = perform_news_search(q=query, limit=bounded_limit, offset=bounded_offset)
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
 
 
 if __name__ == "__main__":

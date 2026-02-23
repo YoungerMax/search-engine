@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 from simhash import Simhash
@@ -8,17 +9,16 @@ BATCH_SIZE = 2000
 
 
 def _to_pg_bigint(value: int) -> int:
-    """Map unsigned 64-bit value to signed 64-bit (PostgreSQL BIGINT)."""
     if value >= (1 << 63):
         return value - (1 << 64)
     return value
 
 
-def _flush_rows(cur, rows: list[tuple[int, int]]) -> None:
+async def _flush_rows(cur, rows: list[tuple[int, int]]) -> None:
     if not rows:
         return
 
-    cur.execute(
+    await cur.execute(
         """
         CREATE TEMP TABLE IF NOT EXISTS tmp_document_fingerprints (
           doc_id BIGINT PRIMARY KEY,
@@ -26,11 +26,11 @@ def _flush_rows(cur, rows: list[tuple[int, int]]) -> None:
         ) ON COMMIT DROP
         """
     )
-    with cur.copy("COPY tmp_document_fingerprints(doc_id, fingerprint) FROM STDIN") as copy:
+    async with cur.copy("COPY tmp_document_fingerprints(doc_id, fingerprint) FROM STDIN") as copy:
         for row in rows:
-            copy.write_row(row)
+            await copy.write_row(row)
 
-    cur.execute(
+    await cur.execute(
         """
         INSERT INTO document_fingerprints(doc_id, fingerprint)
         SELECT doc_id, fingerprint
@@ -39,16 +39,16 @@ def _flush_rows(cur, rows: list[tuple[int, int]]) -> None:
         SET fingerprint = EXCLUDED.fingerprint
         """
     )
-    cur.execute("TRUNCATE tmp_document_fingerprints")
+    await cur.execute("TRUNCATE tmp_document_fingerprints")
 
 
-def run() -> None:
+async def run() -> None:
     total_nodes = max(1, int(os.environ.get("BATCH_TOTAL_NODES", "1")))
     node_index = int(os.environ.get("BATCH_NODE_INDEX", "0"))
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 """
                 SELECT id, content
                 FROM documents
@@ -57,16 +57,17 @@ def run() -> None:
                 """,
                 (total_nodes, node_index),
             )
+            source_rows = await cur.fetchall()
             rows: list[tuple[int, int]] = []
-            for doc_id, content in cur:
+            for doc_id, content in source_rows:
                 fp = _to_pg_bigint(Simhash((content or "").split()).value)
                 rows.append((doc_id, fp))
                 if len(rows) >= BATCH_SIZE:
-                    _flush_rows(cur, rows)
+                    await _flush_rows(cur, rows)
                     rows.clear()
 
-            _flush_rows(cur, rows)
+            await _flush_rows(cur, rows)
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())

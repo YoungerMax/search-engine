@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 
 from app.common.db import get_conn
@@ -6,11 +7,11 @@ DAMPING = 0.85
 ITERATIONS = 20
 
 
-def run() -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM documents WHERE status='done'")
-            nodes = [r[0] for r in cur.fetchall()]
+async def run() -> None:
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id FROM documents WHERE status='done'")
+            nodes = [r[0] for r in await cur.fetchall()]
             n = len(nodes)
             if n == 0:
                 return
@@ -19,8 +20,8 @@ def run() -> None:
             outgoing = defaultdict(list)
             inlinks = defaultdict(int)
 
-            cur.execute("SELECT source_doc_id, target_doc_id FROM links_resolved")
-            for s, t in cur.fetchall():
+            await cur.execute("SELECT source_doc_id, target_doc_id FROM links_resolved")
+            for s, t in await cur.fetchall():
                 if s in idx and t in idx:
                     outgoing[s].append(t)
                     inlinks[t] += 1
@@ -36,18 +37,18 @@ def run() -> None:
                             new_pr[t] += share
                 pr = new_pr
 
-            cur.execute("""
+            await cur.execute("""
                 CREATE TEMP TABLE tmp_document_authority (
                   doc_id BIGINT PRIMARY KEY,
                   pagerank DOUBLE PRECISION NOT NULL,
                   inlink_count INT NOT NULL
                 ) ON COMMIT DROP
             """)
-            with cur.copy("COPY tmp_document_authority(doc_id, pagerank, inlink_count) FROM STDIN") as copy:
+            async with cur.copy("COPY tmp_document_authority(doc_id, pagerank, inlink_count) FROM STDIN") as copy:
                 for node in nodes:
-                    copy.write_row((node, pr[node], inlinks[node]))
+                    await copy.write_row((node, pr[node], inlinks[node]))
 
-            cur.execute("""
+            await cur.execute("""
                 INSERT INTO document_authority(doc_id, pagerank, inlink_count)
                 SELECT doc_id, pagerank, inlink_count
                 FROM tmp_document_authority
@@ -58,4 +59,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())

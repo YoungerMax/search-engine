@@ -1,17 +1,19 @@
+import asyncio
+
 from app.common.db import get_conn
 
 
-def run() -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT AVG(word_count)::float FROM documents WHERE status='done'")
-            avg_doc_len = cur.fetchone()[0] or 0.0
+async def run() -> None:
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT AVG(word_count)::float FROM documents WHERE status='done'")
+            avg_doc_len = (await cur.fetchone())[0] or 0.0
 
-            cur.execute("SELECT COUNT(*) FROM documents WHERE status='done'")
-            doc_total = cur.fetchone()[0] or 1
+            await cur.execute("SELECT COUNT(*) FROM documents WHERE status='done'")
+            doc_total = (await cur.fetchone())[0] or 1
 
-            cur.execute("TRUNCATE term_statistics")
-            cur.execute(
+            await cur.execute("TRUNCATE term_statistics")
+            await cur.execute(
                 """
                 INSERT INTO term_statistics(term, doc_frequency, idf, avg_doc_len)
                 SELECT t.term,
@@ -26,4 +28,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())

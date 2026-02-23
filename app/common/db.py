@@ -1,5 +1,5 @@
-from contextlib import contextmanager
-from typing import Iterator
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 import os
 
 import psycopg
@@ -18,14 +18,14 @@ def _conninfo() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
-@contextmanager
-def get_conn() -> Iterator[psycopg.Connection]:
-    conn = psycopg.connect(_conninfo())
+@asynccontextmanager
+async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
+    conn = await psycopg.AsyncConnection.connect(_conninfo())
     try:
         yield conn
-        conn.commit()
+        await conn.commit()
     except Exception:
-        conn.rollback()
+        await conn.rollback()
         raise
     finally:
-        conn.close()
+        await conn.close()

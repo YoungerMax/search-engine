@@ -1,4 +1,5 @@
-from contextlib import contextmanager
+import asyncio
+from contextlib import asynccontextmanager
 
 from app.batch.news_fetcher import _persist_feed
 
@@ -7,24 +8,34 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.executemany_calls: list[tuple[str, list[tuple[object, ...]]]] = []
 
-    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+    async def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
         return None
 
-    def executemany(self, sql: str, seq) -> None:
+    async def executemany(self, sql: str, seq) -> None:
         self.executemany_calls.append((sql, list(seq)))
+
+
+class _CursorCtx:
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+
+    async def __aenter__(self):
+        return self._cursor
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 class _FakeConn:
     def __init__(self, cursor: _FakeCursor) -> None:
         self._cursor = cursor
 
-    @contextmanager
     def cursor(self):
-        yield self._cursor
+        return _CursorCtx(self._cursor)
 
 
-@contextmanager
-def _fake_get_conn(cursor: _FakeCursor):
+@asynccontextmanager
+async def _fake_get_conn(cursor: _FakeCursor):
     yield _FakeConn(cursor)
 
 
@@ -51,7 +62,7 @@ def test_persist_feed_enqueues_article_urls(monkeypatch) -> None:
         },
     ]
 
-    _persist_feed("https://example.com/feed.xml", items)
+    asyncio.run(_persist_feed("https://example.com/feed.xml", items))
 
     queue_calls = [call for call in cursor.executemany_calls if "INSERT INTO crawl_queue" in call[0]]
     assert len(queue_calls) == 1
@@ -62,4 +73,3 @@ def test_persist_feed_enqueues_article_urls(monkeypatch) -> None:
     token_calls = [call for call in cursor.executemany_calls if "INSERT INTO tokens" in call[0]]
     assert len(token_calls) == 2
     assert all("source_type" in call[0] for call in token_calls)
-

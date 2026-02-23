@@ -17,11 +17,11 @@ class QueueItem:
 
 
 class QueueManager:
-    def enqueue_url(self, raw_url: str) -> None:
+    async def enqueue_url(self, raw_url: str) -> None:
         url = normalize_url(raw_url)
         domain = registrable_domain(url)
-        with get_conn() as conn:
-            cur = conn.execute(
+        async with get_conn() as conn:
+            cur = await conn.execute(
                 """
                 INSERT INTO crawl_queue(url, status, domain, attempt_count)
                 VALUES (%s, 'queued', %s, 0)
@@ -31,10 +31,10 @@ class QueueManager:
             )
             logger.info("enqueue url=%s inserted=%s", url, cur.rowcount > 0)
 
-    def dequeue_many(self, limit: int) -> list[QueueItem]:
-        with get_conn() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
+    async def dequeue_many(self, limit: int) -> list[QueueItem]:
+        async with get_conn() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
                     """
                     WITH next_urls AS (
                       SELECT q.url, q.domain
@@ -54,13 +54,13 @@ class QueueManager:
                     """,
                     (limit,),
                 )
-                rows = cur.fetchall()
+                rows = await cur.fetchall()
                 logger.info("dequeue requested=%s returned=%s", limit, len(rows))
                 return [QueueItem(url=r["url"], domain=r["domain"]) for r in rows]
 
-    def mark_status(self, url: str, status: str) -> None:
-        with get_conn() as conn:
-            cur = conn.execute(
+    async def mark_status(self, url: str, status: str) -> None:
+        async with get_conn() as conn:
+            cur = await conn.execute(
                 "UPDATE crawl_queue SET status=%s, last_attempt=%s WHERE url=%s",
                 (status, datetime.now(timezone.utc), url),
             )
