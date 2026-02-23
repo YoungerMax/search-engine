@@ -241,6 +241,7 @@ def _persist(url: str, parsed: ParsedPage, quality: float, freshness: float) -> 
                     token_rows,
                 )
 
+
             if parsed.feed_links:
                 cur.executemany(
                     """
