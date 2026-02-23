@@ -1,6 +1,10 @@
+import json
 import logging
 import math
+import os
 import urllib.request
+from datetime import datetime
+from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass
 
@@ -10,6 +14,9 @@ from app.spellcheck.engine import iter_words, normalize_word, popularity_score
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S = 8
+
+SPELLCHECK_META_PATH = os.environ.get("SPELLCHECK_META_PATH", "/tmp/spellcheck_meta.json")
+SPELLCHECK_META_MAX_WORDS = int(os.environ.get("SPELLCHECK_META_MAX_WORDS", "120000"))
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,7 @@ def run() -> None:
                 return
 
             dictionary_rows.sort(key=lambda row: row[4], reverse=True)
+            _write_meta_file(dictionary_rows)
 
             cur.execute(
                 """
@@ -250,6 +258,26 @@ def run() -> None:
                 upserted_rows,
                 deleted_rows,
             )
+
+
+def _write_meta_file(dictionary_rows: list[tuple[str, int, int, int, float]]) -> None:
+    top_rows = dictionary_rows[:SPELLCHECK_META_MAX_WORDS]
+    payload = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "words": [
+            {
+                "word": word,
+                "doc_frequency": doc_freq,
+                "total_frequency": total_freq,
+                "external_frequency": ext_freq,
+                "popularity_score": pop,
+            }
+            for word, doc_freq, total_freq, ext_freq, pop in top_rows
+        ],
+    }
+    path = Path(SPELLCHECK_META_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
 
 
 if __name__ == "__main__":
