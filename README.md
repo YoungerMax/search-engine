@@ -58,6 +58,14 @@ curl 'http://localhost:8000/search?q=example'
 curl 'http://localhost:8000/search?q=example&limit=10&offset=0'
 ```
 
+### 4) Run MCP web search server
+
+Expose search as an MCP tool (`web_search`) for MCP-compatible clients:
+
+```bash
+python -m app.mcp.server
+```
+
 ### Seed a URL into the crawl queue
 
 ```bash
@@ -100,6 +108,7 @@ Response shape:
 - `app/batch/*.py`: offline global jobs, including integrated RSS/Atom news fetcher.
 - `app/batch/runner.py`: always-running batch scheduler loop.
 - `app/api/main.py`: FastAPI `/search` endpoint.
+- `app/mcp/server.py`: FastMCP server exposing `web_search` tool.
 - `alembic/`: versioned migrations (single schema source of truth).
 - `scripts/update_cluster.sh`: Swarm update with migration window.
 
