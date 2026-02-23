@@ -174,10 +174,12 @@ def _persist_feed(feed_url: str, items: list[dict[str, object]]) -> None:
                     "DELETE FROM tokens WHERE source_type = 2 AND article_url = %s",
                     (item["url"],),
                 )
-                cur.executemany(
-                    "INSERT INTO tokens(doc_id, article_url, source_type, term, field, frequency, positions) VALUES (NULL,%s,2,%s,4,%s,'{}')",
-                    ((item["url"], term, freq) for term, freq in terms.items()),
-                )
+                if terms:
+                    cur.executemany(
+                        "INSERT INTO tokens(doc_id, article_url, source_type, term, field, frequency, positions) VALUES (NULL,%s,2,%s,4,%s,'{}')",
+                        ((item["url"], term, freq) for term, freq in terms.items()),
+                    )
+
 
             if discovered_urls:
                 cur.executemany(

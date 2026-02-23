@@ -62,3 +62,4 @@ def test_persist_feed_enqueues_article_urls(monkeypatch) -> None:
     token_calls = [call for call in cursor.executemany_calls if "INSERT INTO tokens" in call[0]]
     assert len(token_calls) == 2
     assert all("source_type" in call[0] for call in token_calls)
+

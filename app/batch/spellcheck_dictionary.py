@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from app.common.db import get_conn
-from app.spellcheck.engine import iter_words, normalize_word, popularity_score
+from app.spellcheck.engine import normalize_word, popularity_score
 
 logger = logging.getLogger(__name__)
 
@@ -109,41 +109,60 @@ def _collect_external_frequencies() -> Counter[str]:
     return external_frequency
 
 
-def _collect_document_stats(cur) -> tuple[Counter[str], Counter[str]]:
-    doc_frequency: Counter[str] = Counter()
-    total_frequency: Counter[str] = Counter()
+def _rebuild_words_table(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS words (
+            word TEXT PRIMARY KEY,
+            total_frequency BIGINT NOT NULL
+        )
+        """
+    )
 
-    cur.execute("SELECT title, description, content FROM documents WHERE status = 'done'")
-    for title, description, content in cur:
-        text = f"{title or ''} {description or ''} {content or ''}"
-        words = Counter(iter_words(text))
-        if not words:
-            continue
-        total_frequency.update(words)
-        doc_frequency.update(words.keys())
+    cur.execute("TRUNCATE TABLE words")
+    cur.execute(
+        """
+        INSERT INTO words(word, total_frequency)
+        SELECT word, SUM(freq) AS total_frequency
+        FROM (
+            SELECT m.word AS word, COUNT(*)::bigint AS freq
+            FROM documents d
+            JOIN LATERAL regexp_matches(lower(
+                concat_ws(' ', d.title, d.description, d.content)
+            ), '[a-z]{2,32}', 'g') AS m(word) ON TRUE
+            WHERE d.status = 'done'
+            GROUP BY m.word
 
-    return doc_frequency, total_frequency
+            UNION ALL
+
+            SELECT m.word AS word, COUNT(*)::bigint AS freq
+            FROM news_articles na
+            JOIN LATERAL regexp_matches(lower(
+                concat_ws(' ', na.title, na.description, na.content)
+            ), '[a-z]{2,32}', 'g') AS m(word) ON TRUE
+            GROUP BY m.word
+        ) all_words
+        GROUP BY word
+        """
+    )
 
 
-def _collect_token_stats(cur) -> tuple[Counter[str], Counter[str]]:
+def _collect_word_stats(cur) -> tuple[Counter[str], Counter[str]]:
     doc_frequency: Counter[str] = Counter()
     total_frequency: Counter[str] = Counter()
 
     cur.execute(
         """
-        SELECT term, COUNT(DISTINCT doc_id) AS doc_freq, SUM(frequency) AS total_freq
-        FROM tokens
-        WHERE term ~ '^[a-z]{2,32}$'
-        GROUP BY term
+        SELECT word, total_frequency
+        FROM words
         """
     )
 
-    for term, doc_freq, total_freq in cur:
-        word = normalize_word(term)
-        if not word.isalpha() or len(word) < 2:
+    for word, total_freq in cur:
+        normalized = normalize_word(word)
+        if not normalized.isalpha() or len(normalized) < 2:
             continue
-        doc_frequency[word] += int(doc_freq or 0)
-        total_frequency[word] += int(total_freq or 0)
+        total_frequency[normalized] += int(total_freq or 0)
 
     return doc_frequency, total_frequency
 
@@ -153,11 +172,8 @@ def run() -> None:
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            document_doc_freq, document_total_freq = _collect_document_stats(cur)
-            token_doc_freq, token_total_freq = _collect_token_stats(cur)
-
-            doc_frequency = document_doc_freq + token_doc_freq
-            total_frequency = document_total_freq + token_total_freq
+            _rebuild_words_table(cur)
+            doc_frequency, total_frequency = _collect_word_stats(cur)
 
             all_words = set(doc_frequency.keys()) | set(total_frequency.keys()) | set(external_frequency.keys())
             dictionary_rows: list[tuple[str, int, int, int, float]] = []
