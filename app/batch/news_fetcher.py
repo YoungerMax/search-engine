@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 MAX_FEEDS_PER_RUN = 100
 MAX_ITEMS_PER_FEED = 50
+MAX_ARTICLE_URL_LENGTH = 2000
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -96,6 +97,7 @@ async def _fetch_image_base64(client: httpx.AsyncClient, image_url: str) -> str:
         response = await client.get(image_url, headers={"User-Agent": "search-engine-news-fetcher/1.0"})
         if response.status_code >= 400 or not response.content:
             return ""
+
         return base64.b64encode(response.content).decode("ascii")
     except Exception:
         return ""
@@ -115,6 +117,10 @@ async def _parse_item_with_image(client: httpx.AsyncClient, feed_url: str, node)
     try:
         url = normalize_url(urljoin(feed_url, link))
     except Exception:
+        return None
+
+    if len(url) > MAX_ARTICLE_URL_LENGTH:
+        logger.warning("skipping feed item with oversized url length=%s feed=%s", len(url), feed_url)
         return None
 
     title = _text(node, "title")
