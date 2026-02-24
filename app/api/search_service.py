@@ -4,7 +4,7 @@ import math
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from psycopg.errors import CharacterNotInRepertoire
 
 from app.common.db import get_conn_async
@@ -69,7 +69,16 @@ NEWS_SEARCH_SQL = """
 SELECT na.title,
        COALESCE(na.description, '') AS description,
        na.url,
-       nf.name AS feed_name,
+       nf.feed_url,
+       nf.home_url,
+       nf.name,
+       nf.link,
+       nf.image,
+       nf.discovered_by_url,
+       nf.last_published,
+       nf.last_fetched,
+       nf.next_fetch_at,
+       nf.publish_rate_per_hour,
        na.author,
        na.published_at,
        SUM(
@@ -83,13 +92,31 @@ LEFT JOIN news_feeds nf ON nf.feed_url = na.feed_url
 LEFT JOIN term_statistics ts ON ts.term = t.term
 WHERE t.source_type = 2
   AND t.term = ANY(%s)
-GROUP BY na.title, na.description, na.url, nf.name, na.author, na.published_at
+GROUP BY na.title, na.description, na.url,
+         nf.feed_url, nf.home_url, nf.name, nf.link, nf.image, nf.discovered_by_url,
+         nf.last_published, nf.last_fetched, nf.next_fetch_at, nf.publish_rate_per_hour,
+         na.author, na.published_at
 ORDER BY token_score DESC, na.url ASC
 LIMIT %s
 """
 
 CANDIDATE_BUFFER = 200
 MAX_CANDIDATES = 2000
+
+
+
+
+class NewsFeed(BaseModel):
+    feed_url: str | None = None
+    home_url: str | None = None
+    name: str | None = None
+    link: str | None = None
+    image: str | None = None
+    discovered_by_url: str | None = None
+    last_published: str | None = None
+    last_fetched: str | None = None
+    next_fetch_at: str | None = None
+    publish_rate_per_hour: float | None = None
 
 
 class WebSearchItem(BaseModel):
@@ -100,12 +127,11 @@ class WebSearchItem(BaseModel):
 
 
 class NewsSearchItem(BaseModel):
-    type: str = Field(default="news")
     title: str
     description: str
     url: str
     score: float
-    feed_name: str | None = None
+    feed: NewsFeed | None = None
     author: str | None = None
     published_at: str | None = None
 
@@ -235,6 +261,23 @@ class SearchService:
         ranked_results.sort(key=lambda item: (-item.score, item.url))
         return ranked_results
 
+
+    def _news_feed_from_row(self, row: tuple[Any, ...]) -> NewsFeed | None:
+        if not row[3]:
+            return None
+        return NewsFeed(
+            feed_url=row[3],
+            home_url=row[4],
+            name=row[5],
+            link=row[6],
+            image=row[7],
+            discovered_by_url=row[8],
+            last_published=row[9].isoformat() if row[9] else None,
+            last_fetched=row[10].isoformat() if row[10] else None,
+            next_fetch_at=row[11].isoformat() if row[11] else None,
+            publish_rate_per_hour=float(row[12]) if row[12] is not None else None,
+        )
+
     def _rank_news_rows(self, rows: list[tuple[Any, ...]], *, context: dict[str, Any]) -> list[NewsSearchItem]:
         news_results: list[NewsSearchItem] = []
         for row in rows:
@@ -242,8 +285,8 @@ class SearchService:
             description = row[1] or ""
             url = row[2]
             score = self._intent_score(
-                token_score=float(row[6] or 0.0),
-                matched_terms=int(row[7] or 0),
+                token_score=float(row[15] or 0.0),
+                matched_terms=int(row[16] or 0),
                 total_terms=context["total_terms"],
                 query_phrase=context["query_phrase"],
                 query_compact=context["query_compact"],
@@ -258,9 +301,9 @@ class SearchService:
                     description=description,
                     url=url,
                     score=score,
-                    feed_name=row[3],
-                    author=row[4],
-                    published_at=row[5].isoformat() if row[5] else None,
+                    feed=self._news_feed_from_row(row),
+                    author=row[13],
+                    published_at=row[14].isoformat() if row[14] else None,
                 )
             )
         return news_results
@@ -322,3 +365,5 @@ async def perform_web_search(*, q: str, limit: int = 20, offset: int = 0) -> Web
 
 async def perform_news_search(*, q: str, limit: int = 20, offset: int = 0) -> NewsSearchResponse:
     return await search_service.perform_news_search(q=q, limit=limit, offset=offset)
+
+SearchResponse = WebSearchResponse | NewsSearchResponse
